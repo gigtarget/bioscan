@@ -42,6 +42,10 @@ android {
     buildConfig = true
   }
 
+  androidResources {
+    noCompress += "tflite"
+  }
+
   testOptions {
     unitTests {
       isIncludeAndroidResources = true
@@ -80,6 +84,7 @@ dependencies {
   implementation(libs.moshi.kotlin)
   implementation(libs.okhttp)
   implementation(libs.retrofit)
+  implementation("com.google.ai.edge.litert:litert:1.4.1")
 
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)

@@ -1,7 +1,13 @@
 package com.example.bioscan.core.recognition
 
+import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.Color
+import org.tensorflow.lite.Interpreter
+import java.io.FileInputStream
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.nio.MappedByteBuffer
+import java.nio.channels.FileChannel
 import kotlin.math.sqrt
 
 interface IEmbeddingGenerator {
@@ -12,119 +18,165 @@ interface IEmbeddingGenerator {
     val embeddingDimension: Int
 }
 
-class EmbeddingGenerator : IEmbeddingGenerator {
+/**
+ * Real on-device FaceNet inference backed by LiteRT/TensorFlow Lite.
+ *
+ * Input: 160 x 160 RGB float image in [-1, 1]
+ * Output: 128-dimensional L2-normalized face embedding
+ */
+class EmbeddingGenerator(context: Context) : IEmbeddingGenerator, AutoCloseable {
 
-    override val modelVersion: String = "MobileFaceNet-ArcFace-v1.2.0"
-    override val embeddingDimension: Int = 128
+    override val modelVersion: String = MODEL_VERSION
+    override val embeddingDimension: Int = EMBEDDING_DIMENSION
+
+    private val interpreterLock = Any()
+    private val interpreter: Interpreter
+
+    init {
+        val options = Interpreter.Options().apply {
+            setNumThreads(4)
+            setUseXNNPACK(true)
+        }
+        interpreter = Interpreter(loadModelFile(context.applicationContext), options)
+
+        val inputShape = interpreter.getInputTensor(0).shape()
+        val outputShape = interpreter.getOutputTensor(0).shape()
+        require(inputShape.contentEquals(intArrayOf(1, INPUT_SIZE, INPUT_SIZE, 3))) {
+            "Unexpected FaceNet input shape: ${inputShape.contentToString()}"
+        }
+        require(outputShape.lastOrNull() == EMBEDDING_DIMENSION) {
+            "Unexpected FaceNet output shape: ${outputShape.contentToString()}"
+        }
+    }
 
     override fun generateEmbedding(alignedFaceBitmap: Bitmap): FloatArray {
-        val width = alignedFaceBitmap.width
-        val height = alignedFaceBitmap.height
-        val pixels = IntArray(width * height)
-        alignedFaceBitmap.getPixels(pixels, 0, width, 0, 0, width, height)
+        require(!alignedFaceBitmap.isRecycled) { "Cannot embed a recycled bitmap" }
 
-        val rawFeatures = FloatArray(embeddingDimension)
-
-        // Extract deep spatial multi-band color-textural & structural geometric descriptor
-        val gridRows = 8
-        val gridCols = 8
-        val cellW = (width / gridCols).coerceAtLeast(1)
-        val cellH = (height / gridRows).coerceAtLeast(1)
-
-        var idx = 0
-        for (r in 0 until gridRows) {
-            for (c in 0 until gridCols) {
-                if (idx >= embeddingDimension) break
-
-                var sumR = 0f
-                var sumG = 0f
-                var sumB = 0f
-                var count = 0
-
-                val startY = r * cellH
-                val endY = ((r + 1) * cellH).coerceAtMost(height)
-                val startX = c * cellW
-                val endX = ((c + 1) * cellW).coerceAtMost(width)
-
-                for (y in startY until endY) {
-                    for (x in startX until endX) {
-                        val color = pixels[y * width + x]
-                        sumR += Color.red(color) / 255.0f
-                        sumG += Color.green(color) / 255.0f
-                        sumB += Color.blue(color) / 255.0f
-                        count++
-                    }
-                }
-
-                if (count > 0) {
-                    val avgR = sumR / count
-                    val avgG = sumG / count
-                    val avgB = sumB / count
-                    rawFeatures[idx++] = (avgR * 0.3f + avgG * 0.59f + avgB * 0.11f)
-                    if (idx < embeddingDimension) {
-                        rawFeatures[idx++] = (avgR - avgB)
-                    }
-                }
-            }
+        val resized = if (
+            alignedFaceBitmap.width == INPUT_SIZE &&
+            alignedFaceBitmap.height == INPUT_SIZE
+        ) {
+            alignedFaceBitmap
+        } else {
+            Bitmap.createScaledBitmap(alignedFaceBitmap, INPUT_SIZE, INPUT_SIZE, true)
         }
 
-        // Fill remaining features with structural spatial frequency representations
-        var featIdx = idx
-        val centerX = width / 2
-        val centerY = height / 2
+        return try {
+            val pixels = IntArray(INPUT_SIZE * INPUT_SIZE)
+            resized.getPixels(pixels, 0, INPUT_SIZE, 0, 0, INPUT_SIZE, INPUT_SIZE)
 
-        for (i in featIdx until embeddingDimension) {
-            val radius = ((i - featIdx) * 3 + 4).coerceAtMost(width / 2)
-            var sampleSum = 0f
-            var sampleCount = 0
+            val inputBuffer = ByteBuffer
+                .allocateDirect(INPUT_SIZE * INPUT_SIZE * 3 * FLOAT_BYTES)
+                .order(ByteOrder.nativeOrder())
 
-            for (angleDeg in 0 until 360 step 30) {
-                val rad = Math.toRadians(angleDeg.toDouble())
-                val sx = (centerX + radius * Math.cos(rad)).toInt().coerceIn(0, width - 1)
-                val sy = (centerY + radius * Math.sin(rad)).toInt().coerceIn(0, height - 1)
-                val color = pixels[sy * width + sx]
-                sampleSum += Color.green(color) / 255.0f
-                sampleCount++
+            for (pixel in pixels) {
+                inputBuffer.putFloat(((pixel shr 16 and 0xFF) - 127.5f) / 127.5f)
+                inputBuffer.putFloat(((pixel shr 8 and 0xFF) - 127.5f) / 127.5f)
+                inputBuffer.putFloat(((pixel and 0xFF) - 127.5f) / 127.5f)
             }
-            rawFeatures[i] = if (sampleCount > 0) sampleSum / sampleCount else 0.5f
-        }
+            inputBuffer.rewind()
 
-        return l2Normalize(rawFeatures)
+            val output = Array(1) { FloatArray(EMBEDDING_DIMENSION) }
+            synchronized(interpreterLock) {
+                interpreter.run(inputBuffer, output)
+            }
+
+            val embedding = l2Normalize(output[0])
+            require(embedding.all { it.isFinite() }) { "Face model returned invalid values" }
+            embedding
+        } finally {
+            if (resized !== alignedFaceBitmap && !resized.isRecycled) {
+                resized.recycle()
+            }
+        }
     }
 
-    private fun gridHCell(h: Int, rows: Int): Int = (h / rows).coerceAtLeast(1)
+    fun averageEmbeddings(embeddings: List<FloatArray>): FloatArray {
+        require(embeddings.isNotEmpty()) { "At least one embedding is required" }
+        require(embeddings.all { it.size == EMBEDDING_DIMENSION }) {
+            "All embeddings must have dimension $EMBEDDING_DIMENSION"
+        }
+
+        val average = FloatArray(EMBEDDING_DIMENSION)
+        embeddings.forEach { embedding ->
+            embedding.indices.forEach { index ->
+                average[index] += embedding[index]
+            }
+        }
+        average.indices.forEach { index ->
+            average[index] /= embeddings.size.toFloat()
+        }
+        return l2Normalize(average)
+    }
+
+    override fun calculateCosineSimilarity(
+        embedding1: FloatArray,
+        embedding2: FloatArray
+    ): Float {
+        if (embedding1.size != embedding2.size || embedding1.isEmpty()) return -1f
+
+        var dot = 0f
+        var norm1 = 0f
+        var norm2 = 0f
+        for (index in embedding1.indices) {
+            val first = embedding1[index]
+            val second = embedding2[index]
+            dot += first * second
+            norm1 += first * first
+            norm2 += second * second
+        }
+
+        if (norm1 <= 0f || norm2 <= 0f) return -1f
+        return (dot / (sqrt(norm1.toDouble()) * sqrt(norm2.toDouble())).toFloat())
+            .coerceIn(-1f, 1f)
+    }
+
+    override fun calculateEuclideanDistance(
+        embedding1: FloatArray,
+        embedding2: FloatArray
+    ): Float {
+        if (embedding1.size != embedding2.size || embedding1.isEmpty()) {
+            return Float.MAX_VALUE
+        }
+
+        var sumSquared = 0f
+        for (index in embedding1.indices) {
+            val difference = embedding1[index] - embedding2[index]
+            sumSquared += difference * difference
+        }
+        return sqrt(sumSquared.toDouble()).toFloat()
+    }
+
+    override fun close() {
+        synchronized(interpreterLock) {
+            interpreter.close()
+        }
+    }
 
     private fun l2Normalize(vector: FloatArray): FloatArray {
-        var normSq = 0.0f
-        for (v in vector) {
-            normSq += v * v
-        }
-        val norm = sqrt(normSq.toDouble()).toFloat()
-        if (norm == 0f) return vector
-
-        val normalized = FloatArray(vector.size)
-        for (i in vector.indices) {
-            normalized[i] = vector[i] / norm
-        }
-        return normalized
+        var squaredNorm = 0f
+        vector.forEach { value -> squaredNorm += value * value }
+        val norm = sqrt(squaredNorm.toDouble()).toFloat()
+        require(norm > 1e-8f) { "Face embedding has zero length" }
+        return FloatArray(vector.size) { index -> vector[index] / norm }
     }
 
-    override fun calculateCosineSimilarity(embedding1: FloatArray, embedding2: FloatArray): Float {
-        if (embedding1.size != embedding2.size) return 0f
-        var dot = 0.0f
-        for (i in embedding1.indices) {
-            dot += embedding1[i] * embedding2[i]
+    private fun loadModelFile(context: Context): MappedByteBuffer {
+        val assetFileDescriptor = context.assets.openFd(MODEL_ASSET_NAME)
+        FileInputStream(assetFileDescriptor.fileDescriptor).channel.use { channel ->
+            return channel.map(
+                FileChannel.MapMode.READ_ONLY,
+                assetFileDescriptor.startOffset,
+                assetFileDescriptor.declaredLength
+            )
         }
-        return dot.coerceIn(-1.0f, 1.0f)
     }
 
-    override fun calculateEuclideanDistance(embedding1: FloatArray, embedding2: FloatArray): Float {
-        if (embedding1.size != embedding2.size) return Float.MAX_VALUE
-        var sumSq = 0.0f
-        for (i in embedding1.indices) {
-            val diff = embedding1[i] - embedding2[i]
-            sumSq += diff * diff
-        }
-        return sqrt(sumSq.toDouble()).toFloat()
+    companion object {
+        const val MODEL_VERSION = "FaceNet-128-LiteRT-v1"
+        const val MODEL_ASSET_NAME = "facenet.tflite"
+        const val INPUT_SIZE = 160
+        const val EMBEDDING_DIMENSION = 128
+        private const val FLOAT_BYTES = 4
     }
 }

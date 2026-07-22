@@ -3,9 +3,11 @@ package com.example.bioscan.core.common
 import android.content.Context
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.example.bioscan.core.recognition.IdentityMatcher
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
@@ -19,8 +21,8 @@ data class KioskSettings(
     val timeZoneId: String = "UTC",
     val soundAlertsEnabled: Boolean = true,
     val imageRetentionDays: Int = 30,
-    val recognitionThreshold: Float = 0.60f,
-    val recognitionMargin: Float = 0.04f
+    val recognitionThreshold: Float = IdentityMatcher.DEFAULT_THRESHOLD,
+    val recognitionMargin: Float = IdentityMatcher.DEFAULT_MIN_MARGIN
 )
 
 class KioskSettingsRepository(private val context: Context) {
@@ -33,17 +35,37 @@ class KioskSettingsRepository(private val context: Context) {
         val TIMEZONE_ID = stringPreferencesKey("timezone_id")
         val SOUND_ALERTS = booleanPreferencesKey("sound_alerts")
         val IMAGE_RETENTION_DAYS = intPreferencesKey("image_retention_days")
+        val RECOGNITION_THRESHOLD = floatPreferencesKey("recognition_threshold")
+        val RECOGNITION_MARGIN = floatPreferencesKey("recognition_margin")
     }
 
-    val settingsFlow: Flow<KioskSettings> = context.dataStore.data.map { prefs ->
+    val settingsFlow: Flow<KioskSettings> = context.dataStore.data.map { preferences ->
         KioskSettings(
-            terminalMode = TerminalDirectionMode.valueOf(prefs[Keys.TERMINAL_MODE] ?: TerminalDirectionMode.SMART_AUTO.name),
-            cooldownSeconds = prefs[Keys.COOLDOWN_SECONDS] ?: 15,
-            livenessMode = LivenessMode.valueOf(prefs[Keys.LIVENESS_MODE] ?: LivenessMode.STANDARD.name),
-            deviceId = prefs[Keys.DEVICE_ID] ?: "DOOR_FRONT_KIOSK_01",
-            timeZoneId = prefs[Keys.TIMEZONE_ID] ?: "UTC",
-            soundAlertsEnabled = prefs[Keys.SOUND_ALERTS] ?: true,
-            imageRetentionDays = prefs[Keys.IMAGE_RETENTION_DAYS] ?: 30
+            terminalMode = runCatching {
+                TerminalDirectionMode.valueOf(
+                    preferences[Keys.TERMINAL_MODE] ?: TerminalDirectionMode.SMART_AUTO.name
+                )
+            }.getOrDefault(TerminalDirectionMode.SMART_AUTO),
+            cooldownSeconds = (preferences[Keys.COOLDOWN_SECONDS] ?: 15).coerceIn(5, 600),
+            livenessMode = runCatching {
+                LivenessMode.valueOf(
+                    preferences[Keys.LIVENESS_MODE] ?: LivenessMode.STANDARD.name
+                )
+            }.getOrDefault(LivenessMode.STANDARD),
+            deviceId = preferences[Keys.DEVICE_ID] ?: "DOOR_FRONT_KIOSK_01",
+            timeZoneId = preferences[Keys.TIMEZONE_ID] ?: "UTC",
+            soundAlertsEnabled = preferences[Keys.SOUND_ALERTS] ?: true,
+            imageRetentionDays = preferences[Keys.IMAGE_RETENTION_DAYS] ?: 30,
+            recognitionThreshold = (preferences[Keys.RECOGNITION_THRESHOLD]
+                ?: IdentityMatcher.DEFAULT_THRESHOLD).coerceIn(
+                IdentityMatcher.DEFAULT_THRESHOLD,
+                0.95f
+            ),
+            recognitionMargin = (preferences[Keys.RECOGNITION_MARGIN]
+                ?: IdentityMatcher.DEFAULT_MIN_MARGIN).coerceIn(
+                IdentityMatcher.DEFAULT_MIN_MARGIN,
+                0.35f
+            )
         )
     }
 
@@ -52,7 +74,7 @@ class KioskSettingsRepository(private val context: Context) {
     }
 
     suspend fun updateCooldown(seconds: Int) {
-        context.dataStore.edit { it[Keys.COOLDOWN_SECONDS] = seconds }
+        context.dataStore.edit { it[Keys.COOLDOWN_SECONDS] = seconds.coerceIn(5, 600) }
     }
 
     suspend fun updateLivenessMode(mode: LivenessMode) {
@@ -69,5 +91,23 @@ class KioskSettingsRepository(private val context: Context) {
 
     suspend fun updateSoundAlerts(enabled: Boolean) {
         context.dataStore.edit { it[Keys.SOUND_ALERTS] = enabled }
+    }
+
+    suspend fun updateRecognitionThreshold(value: Float) {
+        context.dataStore.edit {
+            it[Keys.RECOGNITION_THRESHOLD] = value.coerceIn(
+                IdentityMatcher.DEFAULT_THRESHOLD,
+                0.95f
+            )
+        }
+    }
+
+    suspend fun updateRecognitionMargin(value: Float) {
+        context.dataStore.edit {
+            it[Keys.RECOGNITION_MARGIN] = value.coerceIn(
+                IdentityMatcher.DEFAULT_MIN_MARGIN,
+                0.35f
+            )
+        }
     }
 }

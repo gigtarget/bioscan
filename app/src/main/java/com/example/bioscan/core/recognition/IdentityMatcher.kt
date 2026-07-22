@@ -2,12 +2,14 @@ package com.example.bioscan.core.recognition
 
 import com.example.bioscan.core.common.CryptoUtils
 
+
 data class CandidateMatch(
     val employeeId: String,
     val similarityScore: Float,
     val secondBestScore: Float,
     val scoreMargin: Float,
-    val decision: IdentityDecision
+    val decision: IdentityDecision,
+    val supportingTemplateCount: Int = 0
 )
 
 enum class IdentityDecision {
@@ -21,93 +23,180 @@ enum class IdentityDecision {
     ENGINE_ERROR
 }
 
+data class EncryptedTemplateRecord(
+    val employeeId: String,
+    val encryptedEmbedding: String,
+    val modelVersion: String,
+    val qualityScore: Float,
+    val isCentroid: Boolean
+)
+
 class IdentityMatcher(private val embeddingGenerator: IEmbeddingGenerator) {
 
-    data class EmployeeTemplateInMemory(
+    private data class EmployeeTemplateInMemory(
         val employeeId: String,
-        val floatArrayEmbedding: FloatArray
+        val embedding: FloatArray,
+        val qualityScore: Float,
+        val isCentroid: Boolean
+    )
+
+    private data class EmployeeScore(
+        val employeeId: String,
+        val score: Float,
+        val supportingTemplates: Int
     )
 
     private val cachedTemplates = mutableListOf<EmployeeTemplateInMemory>()
 
-    fun updateTemplateIndex(templates: List<Pair<String, String>>) { // Pair<EmployeeId, Base64EncryptedEmbedding>
+    fun updateTemplateIndex(templates: List<EncryptedTemplateRecord>) {
+        val decodedTemplates = templates.mapNotNull { template ->
+            if (template.modelVersion != embeddingGenerator.modelVersion) return@mapNotNull null
+
+            val embedding = CryptoUtils.decryptEmbedding(template.encryptedEmbedding)
+                ?: return@mapNotNull null
+            if (embedding.size != embeddingGenerator.embeddingDimension || embedding.any { !it.isFinite() }) {
+                return@mapNotNull null
+            }
+
+            EmployeeTemplateInMemory(
+                employeeId = template.employeeId,
+                embedding = embedding,
+                qualityScore = template.qualityScore.coerceIn(0.25f, 1f),
+                isCentroid = template.isCentroid
+            )
+        }
+
         synchronized(cachedTemplates) {
             cachedTemplates.clear()
-            for (t in templates) {
-                val floats = CryptoUtils.decryptEmbedding(t.second)
-                if (floats != null) {
-                    cachedTemplates.add(EmployeeTemplateInMemory(t.first, floats))
-                }
-            }
+            cachedTemplates.addAll(decodedTemplates)
         }
     }
 
     fun findMatch(
         queryEmbedding: FloatArray,
-        threshold: Float = 0.60f,
-        minMargin: Float = 0.04f
+        threshold: Float = DEFAULT_THRESHOLD,
+        minMargin: Float = DEFAULT_MIN_MARGIN
     ): CandidateMatch {
-        val listCopy: List<EmployeeTemplateInMemory>
-        synchronized(cachedTemplates) {
-            listCopy = ArrayList(cachedTemplates)
+        if (
+            queryEmbedding.size != embeddingGenerator.embeddingDimension ||
+            queryEmbedding.any { !it.isFinite() }
+        ) {
+            return unknown()
         }
 
-        if (listCopy.isEmpty()) {
+        val templates = synchronized(cachedTemplates) { cachedTemplates.toList() }
+        if (templates.isEmpty()) return unknown()
+
+        val employeeScores = templates
+            .groupBy { it.employeeId }
+            .mapNotNull { (employeeId, employeeTemplates) ->
+                scoreEmployee(employeeId, employeeTemplates, queryEmbedding, threshold)
+            }
+            .sortedByDescending { it.score }
+
+        val best = employeeScores.firstOrNull() ?: return unknown()
+        val secondBestScore = employeeScores.getOrNull(1)?.score ?: -1f
+        val margin = best.score - secondBestScore
+
+        if (best.supportingTemplates < MIN_SUPPORTING_TEMPLATES || best.score < threshold) {
             return CandidateMatch(
                 employeeId = "",
-                similarityScore = 0f,
-                secondBestScore = 0f,
-                scoreMargin = 0f,
-                decision = IdentityDecision.UNKNOWN
-            )
-        }
-
-        // Group scores per employeeId (take best score if employee has multiple templates)
-        val employeeScores = mutableMapOf<String, Float>()
-
-        for (item in listCopy) {
-            val sim = embeddingGenerator.calculateCosineSimilarity(queryEmbedding, item.floatArrayEmbedding)
-            val currentBest = employeeScores[item.employeeId] ?: -1f
-            if (sim > currentBest) {
-                employeeScores[item.employeeId] = sim
-            }
-        }
-
-        val sorted = employeeScores.entries.sortedByDescending { it.value }
-
-        val best = sorted.firstOrNull() ?: return CandidateMatch("", 0f, 0f, 0f, IdentityDecision.UNKNOWN)
-        val bestScore = best.value
-        val bestEmployeeId = best.key
-
-        val secondBestScore = if (sorted.size > 1) sorted[1].value else 0f
-        val margin = bestScore - secondBestScore
-
-        if (bestScore < threshold) {
-            return CandidateMatch(
-                employeeId = bestEmployeeId,
-                similarityScore = bestScore,
+                similarityScore = best.score,
                 secondBestScore = secondBestScore,
                 scoreMargin = margin,
-                decision = IdentityDecision.UNKNOWN
+                decision = IdentityDecision.UNKNOWN,
+                supportingTemplateCount = best.supportingTemplates
             )
         }
 
         if (margin < minMargin) {
             return CandidateMatch(
-                employeeId = bestEmployeeId,
-                similarityScore = bestScore,
+                employeeId = "",
+                similarityScore = best.score,
                 secondBestScore = secondBestScore,
                 scoreMargin = margin,
-                decision = IdentityDecision.AMBIGUOUS
+                decision = IdentityDecision.AMBIGUOUS,
+                supportingTemplateCount = best.supportingTemplates
             )
         }
 
         return CandidateMatch(
-            employeeId = bestEmployeeId,
-            similarityScore = bestScore,
+            employeeId = best.employeeId,
+            similarityScore = best.score,
             secondBestScore = secondBestScore,
             scoreMargin = margin,
-            decision = IdentityDecision.MATCH
+            decision = IdentityDecision.MATCH,
+            supportingTemplateCount = best.supportingTemplates
         )
+    }
+
+    private fun scoreEmployee(
+        employeeId: String,
+        templates: List<EmployeeTemplateInMemory>,
+        queryEmbedding: FloatArray,
+        threshold: Float
+    ): EmployeeScore? {
+        if (templates.size < MIN_SUPPORTING_TEMPLATES) return null
+
+        val scored = templates.map { template ->
+            val similarity = embeddingGenerator.calculateCosineSimilarity(
+                queryEmbedding,
+                template.embedding
+            )
+            Triple(similarity, template.qualityScore, template.isCentroid)
+        }
+
+        val sampleScores = scored
+            .filterNot { it.third }
+            .sortedByDescending { it.first }
+        val centroidScore = scored
+            .filter { it.third }
+            .maxOfOrNull { it.first }
+
+        val supportingThreshold = (threshold - SUPPORT_TOLERANCE).coerceAtLeast(0.60f)
+        val supportingTemplates = scored.count { it.first >= supportingThreshold }
+
+        val topSamples = sampleScores.take(TOP_SAMPLE_COUNT)
+        if (topSamples.isEmpty()) return null
+
+        val qualityWeightSum = topSamples.sumOf { it.second.toDouble() }.toFloat()
+            .coerceAtLeast(0.001f)
+        val weightedSampleScore = topSamples.sumOf { (score, quality, _) ->
+            (score * quality).toDouble()
+        }.toFloat() / qualityWeightSum
+
+        val combinedScore = if (centroidScore != null) {
+            centroidScore * CENTROID_WEIGHT + weightedSampleScore * SAMPLE_WEIGHT
+        } else {
+            weightedSampleScore
+        }
+
+        return EmployeeScore(
+            employeeId = employeeId,
+            score = combinedScore.coerceIn(-1f, 1f),
+            supportingTemplates = supportingTemplates
+        )
+    }
+
+    private fun unknown() = CandidateMatch(
+        employeeId = "",
+        similarityScore = -1f,
+        secondBestScore = -1f,
+        scoreMargin = 0f,
+        decision = IdentityDecision.UNKNOWN,
+        supportingTemplateCount = 0
+    )
+
+    companion object {
+        const val DEFAULT_THRESHOLD = 0.80f
+        const val DEFAULT_MIN_MARGIN = 0.12f
+        const val DUPLICATE_THRESHOLD = 0.86f
+        const val DUPLICATE_MIN_MARGIN = 0.08f
+
+        private const val MIN_SUPPORTING_TEMPLATES = 3
+        private const val TOP_SAMPLE_COUNT = 4
+        private const val SUPPORT_TOLERANCE = 0.08f
+        private const val CENTROID_WEIGHT = 0.60f
+        private const val SAMPLE_WEIGHT = 0.40f
     }
 }

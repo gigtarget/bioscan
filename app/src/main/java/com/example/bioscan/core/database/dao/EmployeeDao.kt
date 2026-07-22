@@ -4,16 +4,9 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
-import androidx.room.Transaction
 import androidx.room.Update
 import com.example.bioscan.core.database.entity.EmployeeEntity
-import com.example.bioscan.core.database.entity.FaceTemplateEntity
 import kotlinx.coroutines.flow.Flow
-
-data class EmployeeWithTemplates(
-    val employee: EmployeeEntity,
-    val templates: List<FaceTemplateEntity>
-)
 
 @Dao
 interface EmployeeDao {
@@ -23,8 +16,11 @@ interface EmployeeDao {
     @Query("SELECT * FROM employees WHERE isActive = 1 ORDER BY fullName ASC")
     fun getActiveEmployees(): Flow<List<EmployeeEntity>>
 
-    @Query("SELECT * FROM employees WHERE employeeId = :employeeId")
+    @Query("SELECT * FROM employees WHERE employeeId = :employeeId LIMIT 1")
     suspend fun getEmployeeById(employeeId: String): EmployeeEntity?
+
+    @Query("SELECT * FROM employees WHERE LOWER(TRIM(fullName)) = LOWER(TRIM(:fullName)) LIMIT 1")
+    suspend fun getEmployeeByNormalizedName(fullName: String): EmployeeEntity?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertEmployee(employee: EmployeeEntity)
@@ -33,7 +29,11 @@ interface EmployeeDao {
     suspend fun updateEmployee(employee: EmployeeEntity)
 
     @Query("UPDATE employees SET isActive = :isActive, updatedAt = :timestamp WHERE employeeId = :employeeId")
-    suspend fun setEmployeeActiveStatus(employeeId: String, isActive: Boolean, timestamp: Long = System.currentTimeMillis())
+    suspend fun setEmployeeActiveStatus(
+        employeeId: String,
+        isActive: Boolean,
+        timestamp: Long = System.currentTimeMillis()
+    )
 
     @Query("DELETE FROM employees WHERE employeeId = :employeeId")
     suspend fun deleteEmployeeById(employeeId: String)

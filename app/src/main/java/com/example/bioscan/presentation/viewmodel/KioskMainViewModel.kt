@@ -11,6 +11,7 @@ import com.example.bioscan.core.common.KioskSettings
 import com.example.bioscan.core.common.KioskSettingsRepository
 import com.example.bioscan.core.database.BioScanDatabase
 import com.example.bioscan.core.recognition.EmbeddingGenerator
+import com.example.bioscan.core.recognition.EncryptedTemplateRecord
 import com.example.bioscan.core.recognition.FaceAligner
 import com.example.bioscan.core.recognition.FaceDetectorManager
 import com.example.bioscan.core.recognition.FaceQualityAnalyzer
@@ -51,7 +52,7 @@ class KioskMainViewModel(application: Application) : AndroidViewModel(applicatio
     val detectorManager = FaceDetectorManager()
     val qualityAnalyzer = FaceQualityAnalyzer()
     val aligner = FaceAligner()
-    val embeddingGenerator = EmbeddingGenerator()
+    val embeddingGenerator = EmbeddingGenerator(application)
     val identityMatcher = IdentityMatcher(embeddingGenerator)
     val livenessEngine = LivenessEngine()
     val multiFrameConsensus = MultiFrameConsensus()
@@ -100,10 +101,19 @@ class KioskMainViewModel(application: Application) : AndroidViewModel(applicatio
     fun refreshTemplateIndex() {
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
-                employeeRepo.getAllFaceTemplates()
-                    .map { template -> template.employeeId to template.encryptedEmbedding }
-            }.onSuccess { templatePairs ->
-                identityMatcher.updateTemplateIndex(templatePairs)
+                employeeRepo.getActiveFaceTemplates()
+                    .filter { template -> template.modelVersion == embeddingGenerator.modelVersion }
+                    .map { template ->
+                        EncryptedTemplateRecord(
+                            employeeId = template.employeeId,
+                            encryptedEmbedding = template.encryptedEmbedding,
+                            modelVersion = template.modelVersion,
+                            qualityScore = template.qualityScore,
+                            isCentroid = template.isCentroid
+                        )
+                    }
+            }.onSuccess { templates ->
+                identityMatcher.updateTemplateIndex(templates)
             }.onFailure { error ->
                 Log.e(TAG, "Unable to refresh face-template index", error)
             }
@@ -148,6 +158,7 @@ class KioskMainViewModel(application: Application) : AndroidViewModel(applicatio
                     )
                 }
             } catch (error: Throwable) {
+                // Camera/ML exceptions must never terminate the kiosk process.
                 Log.e(TAG, "Frame analysis failed", error)
                 _analysisResult.value = null
                 livenessEngine.reset()
@@ -197,6 +208,7 @@ class KioskMainViewModel(application: Application) : AndroidViewModel(applicatio
                     delay(3_200L)
                     _confirmationState.value = ConfirmationCardState()
                     livenessEngine.reset()
+                    multiFrameConsensus.clearAll()
                 }
             } catch (error: Throwable) {
                 Log.e(TAG, "Attendance recording failed", error)
@@ -222,6 +234,7 @@ class KioskMainViewModel(application: Application) : AndroidViewModel(applicatio
 
     override fun onCleared() {
         detectorManager.close()
+        embeddingGenerator.close()
         toneGenerator?.release()
         super.onCleared()
     }

@@ -5,7 +5,6 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import com.example.bioscan.core.database.entity.FaceTemplateEntity
-import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface FaceTemplateDao {
@@ -14,6 +13,17 @@ interface FaceTemplateDao {
 
     @Query("SELECT * FROM employee_face_templates")
     suspend fun getAllTemplates(): List<FaceTemplateEntity>
+
+    @Query(
+        """
+        SELECT templates.*
+        FROM employee_face_templates AS templates
+        INNER JOIN employees AS employees
+            ON employees.employeeId = templates.employeeId
+        WHERE employees.isActive = 1
+        """
+    )
+    suspend fun getActiveEmployeeTemplates(): List<FaceTemplateEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertTemplate(template: FaceTemplateEntity)

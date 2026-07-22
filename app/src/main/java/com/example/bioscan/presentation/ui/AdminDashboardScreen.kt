@@ -234,7 +234,7 @@ fun DashboardOverviewTab(activeCount: Int, clockedInCount: Int, totalScans: Int)
                 Spacer(modifier = Modifier.height(12.dp))
 
                 HealthRow("ML Kit Detector Engine", "Online (Offline Bundled)", Color(0xFF10B981))
-                HealthRow("Embedding Model", "MobileFaceNet-ArcFace v1.2", Color(0xFF38BDF8))
+                HealthRow("Embedding Model", "FaceNet 128D • LiteRT on-device", Color(0xFF38BDF8))
                 HealthRow("Database Engine", "Room SQLite (AES Keystore Protected)", Color(0xFF10B981))
                 HealthRow("Device Storage", "Safe (12.4 GB Free)", Color(0xFF10B981))
                 HealthRow("Thermal State", "Normal (32.4°C)", Color(0xFF10B981))
@@ -357,7 +357,9 @@ fun GuidedEnrollmentTab(viewModel: AdminViewModel, onCompleted: () -> Unit) {
     var phone by remember { mutableStateOf("") }
 
     val enrollmentState by viewModel.enrollmentState.collectAsStateWithLifecycle()
-    val cameraManager = remember { CameraManager(context) }
+    val cameraManager = remember(context.applicationContext) {
+        CameraManager(context.applicationContext)
+    }
 
     LaunchedEffect(Unit) {
         viewModel.resetEnrollment()
@@ -368,64 +370,88 @@ fun GuidedEnrollmentTab(viewModel: AdminViewModel, onCompleted: () -> Unit) {
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
     ) {
-        Text("Employee Registration & Biometric Face Enrollment", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-        Text("Fill profile details and look at the camera below to capture biometric face vector templates.", color = Color(0xFF94A3B8), fontSize = 13.sp)
+        Text(
+            "Guided Employee Face Enrollment",
+            color = Color.White,
+            fontSize = 20.sp,
+            fontWeight = FontWeight.Bold
+        )
+        Text(
+            "Capture all 12 guided views. Existing employees created with the old scanner must be enrolled again for the new FaceNet model.",
+            color = Color(0xFFFBBF24),
+            fontSize = 13.sp
+        )
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Profile Form Card
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B)),
             shape = RoundedCornerShape(16.dp)
         ) {
             Column(modifier = Modifier.padding(20.dp)) {
-                Text("1. Employee Profile Details", color = Color(0xFF00E5FF), fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                Text(
+                    "1. Employee details",
+                    color = Color(0xFF00E5FF),
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold
+                )
                 Spacer(modifier = Modifier.height(12.dp))
 
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
-                    label = { Text("Full Name (Required)") },
+                    label = { Text("Full name (required)") },
                     placeholder = { Text("e.g. John Doe", color = Color(0xFF64748B)) },
                     modifier = Modifier.fillMaxWidth(),
-                    colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White)
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White
+                    )
                 )
                 Spacer(modifier = Modifier.height(12.dp))
 
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
                     OutlinedTextField(
                         value = department,
                         onValueChange = { department = it },
                         label = { Text("Department") },
-                        placeholder = { Text("e.g. Engineering", color = Color(0xFF64748B)) },
                         modifier = Modifier.weight(1f),
-                        colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White)
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = Color.White,
+                            unfocusedTextColor = Color.White
+                        )
                     )
                     OutlinedTextField(
                         value = designation,
                         onValueChange = { designation = it },
                         label = { Text("Designation") },
-                        placeholder = { Text("e.g. Developer", color = Color(0xFF64748B)) },
                         modifier = Modifier.weight(1f),
-                        colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White)
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = Color.White,
+                            unfocusedTextColor = Color.White
+                        )
                     )
                 }
-
                 Spacer(modifier = Modifier.height(12.dp))
 
                 OutlinedTextField(
                     value = phone,
                     onValueChange = { phone = it },
-                    label = { Text("Phone Number (Optional)") },
+                    label = { Text("Phone number (optional)") },
                     modifier = Modifier.fillMaxWidth(),
-                    colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White)
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White
+                    )
                 )
             }
         }
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Biometric Face Capture Card with Live Camera Preview
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(containerColor = Color(0xFF1E293B)),
@@ -441,95 +467,123 @@ fun GuidedEnrollmentTab(viewModel: AdminViewModel, onCompleted: () -> Unit) {
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(imageVector = Icons.Default.PhotoCamera, contentDescription = null, tint = Color(0xFF00E5FF), modifier = Modifier.size(20.dp))
+                        Icon(
+                            imageVector = Icons.Default.PhotoCamera,
+                            contentDescription = null,
+                            tint = Color(0xFF00E5FF),
+                            modifier = Modifier.size(20.dp)
+                        )
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("2. Biometric Face Scan", color = Color(0xFF00E5FF), fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                        Text(
+                            "2. Multi-view face profile",
+                            color = Color(0xFF00E5FF),
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold
+                        )
                     }
-
                     Text(
-                        text = "${enrollmentState.collectedSamples} / 5 Vector Samples",
+                        text = "${enrollmentState.collectedSamples}/${enrollmentState.targetSamples}",
                         color = if (enrollmentState.isComplete) Color(0xFF10B981) else Color(0xFF38BDF8),
                         fontWeight = FontWeight.Bold,
-                        fontSize = 13.sp
+                        fontSize = 14.sp
                     )
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // Camera Box
+                Surface(
+                    color = Color(0xFF0F172A),
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(14.dp)) {
+                        Text(
+                            text = "Step ${enrollmentState.stepIndex + 1} of 5 • ${enrollmentState.title}",
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 15.sp
+                        )
+                        Text(
+                            text = enrollmentState.prompt,
+                            color = Color(0xFF94A3B8),
+                            fontSize = 13.sp
+                        )
+                        Text(
+                            text = "This step: ${enrollmentState.samplesInCurrentStep}/${enrollmentState.targetSamplesInCurrentStep}",
+                            color = Color(0xFF38BDF8),
+                            fontSize = 12.sp
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(240.dp)
+                        .height(330.dp)
                         .clip(RoundedCornerShape(16.dp))
                         .background(Color.Black)
                         .border(
                             width = 2.dp,
-                            color = if (enrollmentState.isComplete) Color(0xFF10B981) else Color(0xFF00E5FF),
+                            color = when {
+                                enrollmentState.duplicateWarningEmployeeName != null -> Color(0xFFEF4444)
+                                enrollmentState.isComplete -> Color(0xFF10B981)
+                                else -> Color(0xFF00E5FF)
+                            },
                             shape = RoundedCornerShape(16.dp)
                         ),
                     contentAlignment = Alignment.Center
                 ) {
                     AndroidView(
                         factory = { ctx ->
-                            val previewView = PreviewView(ctx)
-                            cameraManager.startCamera(
-                                lifecycleOwner = lifecycleOwner,
-                                surfaceProvider = previewView.surfaceProvider,
-                                onFrameAvailable = { bitmap, rotation ->
-                                    viewModel.processEnrollmentFrame(bitmap, rotation)
-                                }
-                            )
-                            previewView
+                            PreviewView(ctx).apply {
+                                scaleType = PreviewView.ScaleType.FILL_CENTER
+                                implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+                                cameraManager.startCamera(
+                                    lifecycleOwner = lifecycleOwner,
+                                    surfaceProvider = surfaceProvider,
+                                    onFrameAvailable = { bitmap, rotation ->
+                                        viewModel.processEnrollmentFrame(bitmap, rotation)
+                                    }
+                                )
+                            }
                         },
                         modifier = Modifier.fillMaxSize()
                     )
 
-                    DisposableEffect(lifecycleOwner) {
-                        onDispose {
-                            cameraManager.stopCamera()
-                        }
+                    DisposableEffect(cameraManager, lifecycleOwner) {
+                        onDispose { cameraManager.release() }
                     }
 
-                    // Status Overlay Box inside Camera
-                    if (enrollmentState.isComplete) {
-                        Surface(
-                            color = Color(0xEE065F46),
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.padding(16.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(imageVector = Icons.Default.CheckCircle, contentDescription = null, tint = Color.White, modifier = Modifier.size(24.dp))
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("5/5 Face Embeddings Captured!", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                            }
-                        }
-                    } else {
-                        Surface(
-                            color = Color(0xCC0F172A),
-                            shape = RoundedCornerShape(20.dp),
-                            modifier = Modifier
-                                .align(Alignment.BottomCenter)
-                                .padding(12.dp)
-                        ) {
-                            Text(
-                                text = "Position face in camera frame • Hold still...",
-                                color = Color.White,
-                                fontSize = 12.sp,
-                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
-                            )
-                        }
+                    Surface(
+                        color = if (enrollmentState.isComplete) {
+                            Color(0xE6065F46)
+                        } else {
+                            Color(0xD90F172A)
+                        },
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(12.dp)
+                            .fillMaxWidth()
+                    ) {
+                        Text(
+                            text = enrollmentState.qualityMessage,
+                            color = Color.White,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+                        )
                     }
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
-
-                // Progress Bar
                 LinearProgressIndicator(
-                    progress = { enrollmentState.collectedSamples / 5f },
+                    progress = {
+                        enrollmentState.collectedSamples.toFloat() /
+                            enrollmentState.targetSamples.toFloat().coerceAtLeast(1f)
+                    },
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(8.dp)
@@ -538,42 +592,85 @@ fun GuidedEnrollmentTab(viewModel: AdminViewModel, onCompleted: () -> Unit) {
                     trackColor = Color(0xFF334155)
                 )
 
-                Spacer(modifier = Modifier.height(16.dp))
+                enrollmentState.duplicateWarningEmployeeName?.let { duplicateName ->
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Surface(
+                        color = Color(0xFF7F1D1D),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Warning,
+                                contentDescription = null,
+                                tint = Color(0xFFFCA5A5)
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
+                                Text(
+                                    "Duplicate face detected: $duplicateName",
+                                    color = Color.White,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    "Use that employee's exact name to replace their old profile, or reset and enrol a different person.",
+                                    color = Color(0xFFFECACA),
+                                    fontSize = 12.sp
+                                )
+                            }
+                        }
+                    }
+                }
 
+                Spacer(modifier = Modifier.height(16.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     TextButton(
                         onClick = { viewModel.resetEnrollment() },
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier.weight(1f),
+                        enabled = !enrollmentState.isSaving
                     ) {
-                        Icon(imageVector = Icons.Default.Refresh, contentDescription = null, tint = Color(0xFF94A3B8), modifier = Modifier.size(18.dp))
+                        Icon(
+                            imageVector = Icons.Default.Refresh,
+                            contentDescription = null,
+                            tint = Color(0xFF94A3B8),
+                            modifier = Modifier.size(18.dp)
+                        )
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Reset Scan", color = Color(0xFF94A3B8))
+                        Text("Restart", color = Color(0xFF94A3B8))
                     }
 
                     Button(
                         onClick = {
-                            if (name.isBlank()) return@Button
                             viewModel.saveEnrolledEmployee(
                                 fullName = name.trim(),
-                                department = department.ifBlank { "General" }.trim(),
-                                designation = designation.ifBlank { "Staff" }.trim(),
+                                department = department.trim(),
+                                designation = designation.trim(),
                                 payType = payType,
                                 hourlyRate = hourlyRate.toDoubleOrNull(),
                                 phoneNumber = phone.ifBlank { null },
-                                notes = "Enrolled via Kiosk Admin",
+                                notes = "Guided 12-view FaceNet enrollment",
                                 onSuccess = onCompleted
                             )
                         },
-                        enabled = name.isNotBlank(),
+                        enabled = name.isNotBlank() &&
+                            enrollmentState.isComplete &&
+                            !enrollmentState.isSaving,
                         modifier = Modifier.weight(2f),
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0284C7))
                     ) {
-                        Icon(imageVector = Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Icon(
+                            imageVector = Icons.Default.CheckCircle,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text(if (enrollmentState.collectedSamples > 0) "Save Employee & Vectors" else "Save Employee Profile")
+                        Text(if (enrollmentState.isSaving) "Saving…" else "Save secure face profile")
                     }
                 }
             }

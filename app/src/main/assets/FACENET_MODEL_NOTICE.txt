@@ -1,0 +1,4 @@
+BioScan uses a FaceNet TensorFlow Lite model downloaded during the GitHub Actions build.
+Model source: shubham0204/FaceRecognition_With_FaceNet_Android
+Repository license: Apache License 2.0
+The model produces 128-dimensional embeddings from 160x160 RGB face crops.

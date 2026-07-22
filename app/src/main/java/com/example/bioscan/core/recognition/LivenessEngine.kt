@@ -123,12 +123,14 @@ class LivenessEngine {
             LivenessMode.OFF -> listOf(LivenessChallengeType.LOOK_STRAIGHT)
             LivenessMode.STANDARD -> listOf(
                 LivenessChallengeType.LOOK_STRAIGHT,
-                if (Random.nextBoolean()) LivenessChallengeType.BLINK else LivenessChallengeType.TURN_LEFT
+                if (Random.nextBoolean()) LivenessChallengeType.BLINK else LivenessChallengeType.TURN_LEFT,
+                LivenessChallengeType.LOOK_STRAIGHT
             )
             LivenessMode.STRICT -> listOf(
                 LivenessChallengeType.LOOK_STRAIGHT,
                 LivenessChallengeType.BLINK,
-                if (Random.nextBoolean()) LivenessChallengeType.TURN_LEFT else LivenessChallengeType.TURN_RIGHT
+                if (Random.nextBoolean()) LivenessChallengeType.TURN_LEFT else LivenessChallengeType.TURN_RIGHT,
+                LivenessChallengeType.LOOK_STRAIGHT
             )
         }
         currentChallengeIndex = 0
@@ -166,6 +168,6 @@ class LivenessEngine {
 
     private companion object {
         const val CHALLENGE_TIMEOUT_MS = 8_000L
-        const val COMPLETION_HOLD_MS = 1_500L
+        const val COMPLETION_HOLD_MS = 2_500L
     }
 }

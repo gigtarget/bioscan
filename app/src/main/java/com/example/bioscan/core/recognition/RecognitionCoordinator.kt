@@ -5,6 +5,7 @@ import com.example.bioscan.core.common.LivenessMode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
+
 data class FrameAnalysisResult(
     val faceDetected: Boolean,
     val faceCount: Int,
@@ -30,99 +31,114 @@ class RecognitionCoordinator(
         frameBitmap: Bitmap,
         rotationDegrees: Int = 0,
         livenessMode: LivenessMode = LivenessMode.STANDARD,
-        currentThreshold: Float = 0.72f,
-        currentMargin: Float = 0.08f
+        currentThreshold: Float = IdentityMatcher.DEFAULT_THRESHOLD,
+        currentMargin: Float = IdentityMatcher.DEFAULT_MIN_MARGIN
     ): FrameAnalysisResult = withContext(Dispatchers.Default) {
         val startTime = System.currentTimeMillis()
 
         val faces = detectorManager.detectFaces(frameBitmap, rotationDegrees)
         if (faces.isEmpty()) {
-            return@withContext FrameAnalysisResult(
+            multiFrameConsensus.clearAll()
+            return@withContext result(
+                startTime = startTime,
                 faceDetected = false,
-                faceCount = 0,
-                detectedFace = null,
-                quality = null,
-                liveness = null,
-                candidateMatch = null,
-                alignedFaceBitmap = null,
-                inferenceTimeMs = System.currentTimeMillis() - startTime
+                faceCount = 0
             )
         }
 
         if (faces.size > 1) {
+            multiFrameConsensus.clearAll()
             val primaryFace = faces.maxByOrNull { it.boundingBox.width() * it.boundingBox.height() }
-            return@withContext FrameAnalysisResult(
+            return@withContext result(
+                startTime = startTime,
                 faceDetected = true,
                 faceCount = faces.size,
                 detectedFace = primaryFace,
-                quality = null,
-                liveness = null,
-                candidateMatch = CandidateMatch("", 0f, 0f, 0f, IdentityDecision.MULTIPLE_FACES),
-                alignedFaceBitmap = null,
-                inferenceTimeMs = System.currentTimeMillis() - startTime
+                candidateMatch = CandidateMatch("", 0f, 0f, 0f, IdentityDecision.MULTIPLE_FACES)
             )
         }
 
         val face = faces.first()
         val quality = qualityAnalyzer.evaluateQuality(frameBitmap, face)
-
         if (!quality.isQualified) {
-            return@withContext FrameAnalysisResult(
+            multiFrameConsensus.clearTrack(face.trackingId)
+            return@withContext result(
+                startTime = startTime,
                 faceDetected = true,
                 faceCount = 1,
                 detectedFace = face,
                 quality = quality,
-                liveness = null,
-                candidateMatch = CandidateMatch("", 0f, 0f, 0f, IdentityDecision.LOW_QUALITY),
-                alignedFaceBitmap = null,
-                inferenceTimeMs = System.currentTimeMillis() - startTime
+                candidateMatch = CandidateMatch("", 0f, 0f, 0f, IdentityDecision.LOW_QUALITY)
             )
         }
 
-        // Active liveness evaluation
         val livenessState = livenessEngine.evaluateLiveness(face, livenessMode)
         if (!livenessState.isCompleted && livenessMode != LivenessMode.OFF) {
-            return@withContext FrameAnalysisResult(
+            multiFrameConsensus.clearTrack(face.trackingId)
+            return@withContext result(
+                startTime = startTime,
                 faceDetected = true,
                 faceCount = 1,
                 detectedFace = face,
                 quality = quality,
                 liveness = livenessState,
-                candidateMatch = CandidateMatch("", 0f, 0f, 0f, IdentityDecision.LIVENESS_FAILED),
-                alignedFaceBitmap = null,
-                inferenceTimeMs = System.currentTimeMillis() - startTime
+                candidateMatch = CandidateMatch("", 0f, 0f, 0f, IdentityDecision.LIVENESS_FAILED)
             )
         }
 
         val alignedBitmap = aligner.alignAndCropFace(frameBitmap, face)
-        if (alignedBitmap == null) {
-            return@withContext FrameAnalysisResult(
+            ?: return@withContext result(
+                startTime = startTime,
                 faceDetected = true,
                 faceCount = 1,
                 detectedFace = face,
                 quality = quality,
                 liveness = livenessState,
-                candidateMatch = CandidateMatch("", 0f, 0f, 0f, IdentityDecision.LOW_QUALITY),
-                alignedFaceBitmap = null,
-                inferenceTimeMs = System.currentTimeMillis() - startTime
+                candidateMatch = CandidateMatch("", 0f, 0f, 0f, IdentityDecision.LOW_QUALITY)
             )
+
+        try {
+            val embedding = embeddingGenerator.generateEmbedding(alignedBitmap)
+            val initialMatch = identityMatcher.findMatch(
+                queryEmbedding = embedding,
+                threshold = currentThreshold.coerceAtLeast(IdentityMatcher.DEFAULT_THRESHOLD),
+                minMargin = currentMargin.coerceAtLeast(IdentityMatcher.DEFAULT_MIN_MARGIN)
+            )
+            val finalMatch = multiFrameConsensus.addSampleAndCheckConsensus(
+                face.trackingId,
+                initialMatch
+            )
+
+            result(
+                startTime = startTime,
+                faceDetected = true,
+                faceCount = 1,
+                detectedFace = face,
+                quality = quality,
+                liveness = livenessState,
+                candidateMatch = finalMatch
+            )
+        } finally {
+            if (!alignedBitmap.isRecycled) alignedBitmap.recycle()
         }
-
-        val embedding = embeddingGenerator.generateEmbedding(alignedBitmap)
-        val initialMatch = identityMatcher.findMatch(embedding, currentThreshold, currentMargin)
-        val finalMatch = multiFrameConsensus.addSampleAndCheckConsensus(face.trackingId, initialMatch)
-
-        val totalTime = System.currentTimeMillis() - startTime
-
-        FrameAnalysisResult(
-            faceDetected = true,
-            faceCount = 1,
-            detectedFace = face,
-            quality = quality,
-            liveness = livenessState,
-            candidateMatch = finalMatch,
-            alignedFaceBitmap = alignedBitmap,
-            inferenceTimeMs = totalTime
-        )
     }
+
+    private fun result(
+        startTime: Long,
+        faceDetected: Boolean,
+        faceCount: Int,
+        detectedFace: DetectedFaceResult? = null,
+        quality: QualityCheckResult? = null,
+        liveness: LivenessState? = null,
+        candidateMatch: CandidateMatch? = null
+    ) = FrameAnalysisResult(
+        faceDetected = faceDetected,
+        faceCount = faceCount,
+        detectedFace = detectedFace,
+        quality = quality,
+        liveness = liveness,
+        candidateMatch = candidateMatch,
+        alignedFaceBitmap = null,
+        inferenceTimeMs = System.currentTimeMillis() - startTime
+    )
 }
