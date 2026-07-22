@@ -1,0 +1,10 @@
+How to Remove Device Owner Provisioning from BioScan Kiosk:
+
+1. Open BioScan Kiosk on the phone.
+2. Multi-tap the top-right Admin trigger button and enter the Administrator PIN (default: 123456).
+3. Navigate to the "Settings & Backup" tab.
+4. Tap "Exit LockTask Mode".
+5. Connect phone to PC via USB debugging and execute:
+   adb shell dpm remove-active-admin com.aistudio.bioscankiosk.app/com.example.bioscan.core.kiosk.BioScanDeviceAdminReceiver
+
+Note: On some Android versions, removing Device Owner requires a factory reset if prohibited by policy.

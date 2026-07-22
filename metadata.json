@@ -1,0 +1,6 @@
+{
+  "name": "BioScan Kiosk",
+  "description": "Production-quality facial attendance kiosk with face recognition, active liveness, kiosk mode, and offline persistence.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

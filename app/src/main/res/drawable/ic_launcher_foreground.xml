@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Corner Scanner Reticles -->
+    <path
+        android:fillColor="#00E5FF"
+        android:pathData="M32,32v8h-4v-12h12v4h-8zM76,32v-4h-12v-4h16v16h-4zM32,76v-8h-4v12h12v-4h-8zM76,76v4h-12v4h16v-16h-4z" />
+    <!-- Center Face Biometric Outline -->
+    <path
+        android:fillColor="#38BDF8"
+        android:pathData="M54,36c-8.84,0 -16,7.16 -16,16v8c0,8.84 7.16,16 16,16s16,-7.16 16,-16v-8c0,-8.84 -7.16,-16 -16,-16zM54,72c-6.63,0 -12,-5.37 -12,-12v-8c0,-6.63 5.37,-12 12,-12s12,5.37 12,12v8c0,6.63 -5.37,12 -12,12z" />
+    <!-- Eye Landmark Dots -->
+    <path
+        android:fillColor="#38BDF8"
+        android:pathData="M47,48m-2.5,0a2.5,2.5 0 1,1 5,0a2.5,2.5 0 1,1 -5,0" />
+    <path
+        android:fillColor="#38BDF8"
+        android:pathData="M61,48m-2.5,0a2.5,2.5 0 1,1 5,0a2.5,2.5 0 1,1 -5,0" />
+    <!-- Scan Line -->
+    <path
+        android:fillColor="#00E5FF"
+        android:pathData="M34,53h40v2h-40z" />
+</vector>
