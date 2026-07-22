@@ -1,13 +1,12 @@
 package com.example.bioscan.presentation.ui
 
-import android.graphics.Bitmap
 import androidx.camera.view.PreviewView
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,58 +15,58 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.CloudDone
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.PathEffect
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.bioscan.core.camera.CameraManager
 import com.example.bioscan.core.common.TimeUtils
 import com.example.bioscan.core.recognition.IdentityDecision
+import com.example.bioscan.presentation.viewmodel.ConfirmationCardState
 import com.example.bioscan.presentation.viewmodel.KioskMainViewModel
 import kotlinx.coroutines.delay
+
+private val KioskNavy = Color(0xE6121B2E)
+private val KioskCyan = Color(0xFF22D3EE)
+private val KioskGreen = Color(0xFF34D399)
+private val KioskMuted = Color(0xFF94A3B8)
 
 @Composable
 fun ScannerScreen(
@@ -79,22 +78,24 @@ fun ScannerScreen(
 
     val analysisResult by viewModel.analysisResult.collectAsStateWithLifecycle()
     val confirmationState by viewModel.confirmationState.collectAsStateWithLifecycle()
-    val settings by viewModel.kioskSettings.collectAsStateWithLifecycle()
 
-    val cameraManager = remember { CameraManager(context) }
+    val cameraManager = remember(context.applicationContext) {
+        CameraManager(context.applicationContext)
+    }
 
-    var currentTimeText by remember { mutableStateOf(TimeUtils.formatHourMinute(System.currentTimeMillis())) }
-    var currentDateText by remember { mutableStateOf(TimeUtils.formatDateOnly(System.currentTimeMillis())) }
-
-    // Admin trigger gesture counters
-    var tapCount by remember { mutableIntStateOf(0) }
-    var lastTapTime by remember { mutableLongStateOf(0L) }
+    var currentTimeText by remember {
+        mutableStateOf(TimeUtils.formatHourMinute(System.currentTimeMillis()))
+    }
+    var currentDateText by remember {
+        mutableStateOf(TimeUtils.formatDateOnly(System.currentTimeMillis()))
+    }
 
     LaunchedEffect(Unit) {
         while (true) {
-            currentTimeText = TimeUtils.formatHourMinute(System.currentTimeMillis())
-            currentDateText = TimeUtils.formatDateOnly(System.currentTimeMillis())
-            delay(1000L)
+            val now = System.currentTimeMillis()
+            currentTimeText = TimeUtils.formatHourMinute(now)
+            currentDateText = TimeUtils.formatDateOnly(now)
+            delay(1_000L)
         }
     }
 
@@ -103,312 +104,344 @@ fun ScannerScreen(
             .fillMaxSize()
             .background(Color.Black)
     ) {
-        // 1. Camera Preview
         AndroidView(
             factory = { ctx ->
-                val previewView = PreviewView(ctx)
-                cameraManager.startCamera(
-                    lifecycleOwner = lifecycleOwner,
-                    surfaceProvider = previewView.surfaceProvider,
-                    onFrameAvailable = { bitmap, rotation ->
-                        viewModel.processFrame(bitmap, rotation)
-                    }
-                )
-                previewView
+                PreviewView(ctx).apply {
+                    scaleType = PreviewView.ScaleType.FILL_CENTER
+                    implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+                    cameraManager.startCamera(
+                        lifecycleOwner = lifecycleOwner,
+                        surfaceProvider = surfaceProvider,
+                        onFrameAvailable = viewModel::processFrame
+                    )
+                }
             },
             modifier = Modifier.fillMaxSize()
         )
 
-        DisposableEffect(lifecycleOwner) {
-            onDispose {
-                cameraManager.stopCamera()
-            }
+        DisposableEffect(cameraManager, lifecycleOwner) {
+            onDispose { cameraManager.release() }
         }
 
-        // 2. Camera Overlay Reticle Canvas
-        Canvas(modifier = Modifier.fillMaxSize()) {
-            val canvasW = size.width
-            val canvasH = size.height
+        FaceReticleOverlay(
+            decision = analysisResult?.candidateMatch?.decision
+        )
 
-            val boxW = canvasW * 0.68f
-            val boxH = canvasH * 0.48f
-            val left = (canvasW - boxW) / 2f
-            val top = (canvasH - boxH) / 2.2f
+        KioskHeader(
+            dateText = currentDateText,
+            timeText = currentTimeText,
+            onOpenAdmin = onOpenAdmin
+        )
 
-            val strokeWidth = 6.dp.toPx()
-            val cornerLen = 40.dp.toPx()
-
-            val reticleColor = when (analysisResult?.candidateMatch?.decision) {
-                IdentityDecision.MATCH -> Color(0xFF10B981) // Emerald Green
-                IdentityDecision.LIVENESS_FAILED -> Color(0xFFF59E0B) // Amber
-                IdentityDecision.LOW_QUALITY -> Color(0xFFEF4444) // Red
-                else -> Color(0xFF00E5FF) // Cyan
-            }
-
-            val dimColor = Color.Black.copy(alpha = 0.50f)
-
-            // 1. Top Dim Rect
-            drawRect(
-                color = dimColor,
-                topLeft = Offset(0f, 0f),
-                size = Size(canvasW, top)
-            )
-            // 2. Bottom Dim Rect
-            drawRect(
-                color = dimColor,
-                topLeft = Offset(0f, top + boxH),
-                size = Size(canvasW, (canvasH - (top + boxH)).coerceAtLeast(0f))
-            )
-            // 3. Left Dim Rect
-            drawRect(
-                color = dimColor,
-                topLeft = Offset(0f, top),
-                size = Size(left, boxH)
-            )
-            // 4. Right Dim Rect
-            drawRect(
-                color = dimColor,
-                topLeft = Offset(left + boxW, top),
-                size = Size((canvasW - (left + boxW)).coerceAtLeast(0f), boxH)
-            )
-
-            // Draw Corner Brackets
-            // Top Left
-            drawLine(reticleColor, Offset(left, top), Offset(left + cornerLen, top), strokeWidth)
-            drawLine(reticleColor, Offset(left, top), Offset(left, top + cornerLen), strokeWidth)
-
-            // Top Right
-            drawLine(reticleColor, Offset(left + boxW, top), Offset(left + boxW - cornerLen, top), strokeWidth)
-            drawLine(reticleColor, Offset(left + boxW, top), Offset(left + boxW, top + cornerLen), strokeWidth)
-
-            // Bottom Left
-            drawLine(reticleColor, Offset(left, top + boxH), Offset(left + cornerLen, top + boxH), strokeWidth)
-            drawLine(reticleColor, Offset(left, top + boxH), Offset(left, top + boxH - cornerLen), strokeWidth)
-
-            // Bottom Right
-            drawLine(reticleColor, Offset(left + boxW, top + boxH), Offset(left + boxW - cornerLen, top + boxH), strokeWidth)
-            drawLine(reticleColor, Offset(left + boxW, top + boxH), Offset(left + boxW, top + boxH - cornerLen), strokeWidth)
+        val livenessState = analysisResult?.liveness
+        val quality = analysisResult?.quality
+        val guidanceMessage = when {
+            livenessState != null && !livenessState.isCompleted -> livenessState.instructionMessage
+            quality?.rejectionReason != null -> quality.rejectionReason
+            analysisResult?.candidateMatch?.decision == IdentityDecision.MULTIPLE_FACES -> "Only one person should be inside the frame"
+            analysisResult?.candidateMatch?.decision == IdentityDecision.UNKNOWN -> "Face not recognised. Contact an administrator."
+            analysisResult?.candidateMatch?.decision == IdentityDecision.AMBIGUOUS -> "Move closer and look directly at the camera"
+            else -> "Position your face inside the frame"
         }
 
-        // 3. Top Kiosk Status Bar
-        Surface(
+        GuidanceBanner(
+            message = guidanceMessage,
             modifier = Modifier
-                .align(Alignment.TopCenter)
-                .statusBarsPadding()
-                .fillMaxWidth()
-                .padding(16.dp),
-            color = Color(0xCC0F172A),
-            shape = RoundedCornerShape(16.dp)
+                .align(Alignment.BottomCenter)
+                .navigationBarsPadding()
+                .padding(horizontal = 16.dp, vertical = 18.dp)
+        )
+
+        AttendanceConfirmation(
+            state = confirmationState,
+            modifier = Modifier.align(Alignment.Center)
+        )
+    }
+}
+
+@Composable
+private fun KioskHeader(
+    dateText: String,
+    timeText: String,
+    onOpenAdmin: () -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .statusBarsPadding()
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        color = KioskNavy,
+        shape = RoundedCornerShape(20.dp),
+        shadowElevation = 8.dp
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 13.dp)
         ) {
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = "BioScan Kiosk",
                         color = Color.White,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                     Text(
-                        text = "$currentDateText  •  $currentTimeText",
-                        color = Color(0xFF94A3B8),
-                        fontSize = 12.sp
+                        text = "$dateText  •  $timeText",
+                        color = KioskMuted,
+                        fontSize = 12.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
 
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    // System Status Badges
-                    StatusBadge(icon = Icons.Default.PhotoCamera, label = "Ready", color = Color(0xFF10B981))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    StatusBadge(icon = Icons.Default.CloudDone, label = "Offline Ready", color = Color(0xFF38BDF8))
-                    Spacer(modifier = Modifier.width(12.dp))
-
-                    // Prominent Admin Portal Button
+                IconButton(
+                    onClick = onOpenAdmin,
+                    modifier = Modifier
+                        .size(44.dp)
+                        .testTag("admin_trigger_btn")
+                ) {
                     Surface(
-                        onClick = { onOpenAdmin() },
                         color = Color(0xFF1E293B),
-                        shape = RoundedCornerShape(12.dp),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.6f)),
-                        modifier = Modifier.testTag("admin_trigger_btn")
+                        shape = CircleShape,
+                        border = BorderStroke(1.dp, KioskCyan.copy(alpha = 0.55f))
                     ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                        Box(
+                            modifier = Modifier.size(40.dp),
+                            contentAlignment = Alignment.Center
                         ) {
                             Icon(
                                 imageVector = Icons.Default.AdminPanelSettings,
-                                contentDescription = "Admin Area Access",
-                                tint = Color(0xFF00E5FF),
-                                modifier = Modifier.size(20.dp)
+                                contentDescription = "Open administrator area",
+                                tint = KioskCyan,
+                                modifier = Modifier.size(21.dp)
                             )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Column {
-                                Text(
-                                    text = "Admin Settings",
-                                    color = Color.White,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Text(
-                                    text = "PIN: 123456",
-                                    color = Color(0xFF38BDF8),
-                                    fontSize = 10.sp
-                                )
-                            }
                         }
                     }
                 }
             }
-        }
 
-        // 4. Scanning Guidance & Active Liveness Prompt Banner
-        Box(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = 40.dp)
-        ) {
-            val livenessState = analysisResult?.liveness
-            val qual = analysisResult?.quality
+            Spacer(modifier = Modifier.height(10.dp))
 
-            val message = when {
-                livenessState != null && !livenessState.isCompleted -> livenessState.instructionMessage
-                qual?.rejectionReason != null -> qual.rejectionReason
-                analysisResult?.candidateMatch?.decision == IdentityDecision.UNKNOWN -> "Unknown face. Please see Admin."
-                analysisResult?.candidateMatch?.decision == IdentityDecision.AMBIGUOUS -> "Position face clearly..."
-                else -> "Position face inside frame to scan"
-            }
-
-            Surface(
-                color = Color(0xDD0F172A),
-                shape = RoundedCornerShape(30.dp),
-                shadowElevation = 8.dp
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Security,
-                        contentDescription = null,
-                        tint = Color(0xFF00E5FF),
-                        modifier = Modifier.size(24.dp)
-                    )
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Text(
-                        text = message,
-                        color = Color.White,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-                }
-            }
-        }
-
-        // 5. Successful Attendance Splash Card (3-second popover)
-        AnimatedVisibility(
-            visible = confirmationState.isVisible,
-            enter = fadeIn(),
-            exit = fadeOut(),
-            modifier = Modifier.align(Alignment.Center)
-        ) {
-            Card(
-                modifier = Modifier
-                    .padding(24.dp)
-                    .width(340.dp),
-                shape = RoundedCornerShape(24.dp),
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF0F172A)),
-                elevation = CardDefaults.cardElevation(defaultElevation = 16.dp)
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(24.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(72.dp)
-                            .background(Color(0xFF059669), CircleShape),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.CheckCircle,
-                            contentDescription = null,
-                            tint = Color.White,
-                            modifier = Modifier.size(48.dp)
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    Text(
-                        text = confirmationState.employeeName,
-                        color = Color.White,
-                        fontSize = 22.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-
-                    Text(
-                        text = confirmationState.department,
-                        color = Color(0xFF94A3B8),
-                        fontSize = 14.sp
-                    )
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    Surface(
-                        color = if (confirmationState.eventType == "CLOCK_IN") Color(0xFF065F46) else Color(0xFF991B1B),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Text(
-                            text = if (confirmationState.eventType == "CLOCK_IN") "CLOCKED IN" else "CLOCKED OUT",
-                            color = Color.White,
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    Text(
-                        text = confirmationState.formattedTime,
-                        color = Color(0xFFCBD5E1),
-                        fontSize = 13.sp
-                    )
-                }
+                CompactStatusPill(
+                    label = "Camera ready",
+                    color = KioskGreen,
+                    modifier = Modifier.weight(1f)
+                )
+                CompactStatusPill(
+                    label = "Works offline",
+                    color = KioskCyan,
+                    modifier = Modifier.weight(1f)
+                )
             }
         }
     }
 }
 
 @Composable
-fun StatusBadge(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, color: Color) {
+private fun CompactStatusPill(
+    label: String,
+    color: Color,
+    modifier: Modifier = Modifier
+) {
     Surface(
-        color = color.copy(alpha = 0.2f),
-        shape = RoundedCornerShape(20.dp)
+        modifier = modifier,
+        color = color.copy(alpha = 0.13f),
+        shape = RoundedCornerShape(14.dp)
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center
         ) {
             Box(
                 modifier = Modifier
-                    .size(8.dp)
+                    .size(7.dp)
                     .background(color, CircleShape)
             )
-            Spacer(modifier = Modifier.width(6.dp))
+            Spacer(modifier = Modifier.width(7.dp))
             Text(
                 text = label,
                 color = color,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.SemiBold
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
+        }
+    }
+}
+
+@Composable
+private fun FaceReticleOverlay(decision: IdentityDecision?) {
+    Canvas(modifier = Modifier.fillMaxSize()) {
+        val canvasW = size.width
+        val canvasH = size.height
+        val boxW = canvasW * 0.76f
+        val boxH = (canvasH * 0.42f).coerceAtMost(boxW * 1.35f)
+        val left = (canvasW - boxW) / 2f
+        val top = canvasH * 0.27f
+
+        val strokeWidth = 4.dp.toPx()
+        val cornerLength = 34.dp.toPx()
+        val reticleColor = when (decision) {
+            IdentityDecision.MATCH -> KioskGreen
+            IdentityDecision.LIVENESS_FAILED -> Color(0xFFFBBF24)
+            IdentityDecision.LOW_QUALITY -> Color(0xFFFB7185)
+            else -> KioskCyan
+        }
+
+        val dimColor = Color.Black.copy(alpha = 0.42f)
+        drawRect(dimColor, Offset.Zero, Size(canvasW, top))
+        drawRect(
+            dimColor,
+            Offset(0f, top + boxH),
+            Size(canvasW, (canvasH - top - boxH).coerceAtLeast(0f))
+        )
+        drawRect(dimColor, Offset(0f, top), Size(left, boxH))
+        drawRect(
+            dimColor,
+            Offset(left + boxW, top),
+            Size((canvasW - left - boxW).coerceAtLeast(0f), boxH)
+        )
+
+        drawLine(reticleColor, Offset(left, top), Offset(left + cornerLength, top), strokeWidth)
+        drawLine(reticleColor, Offset(left, top), Offset(left, top + cornerLength), strokeWidth)
+        drawLine(reticleColor, Offset(left + boxW, top), Offset(left + boxW - cornerLength, top), strokeWidth)
+        drawLine(reticleColor, Offset(left + boxW, top), Offset(left + boxW, top + cornerLength), strokeWidth)
+        drawLine(reticleColor, Offset(left, top + boxH), Offset(left + cornerLength, top + boxH), strokeWidth)
+        drawLine(reticleColor, Offset(left, top + boxH), Offset(left, top + boxH - cornerLength), strokeWidth)
+        drawLine(reticleColor, Offset(left + boxW, top + boxH), Offset(left + boxW - cornerLength, top + boxH), strokeWidth)
+        drawLine(reticleColor, Offset(left + boxW, top + boxH), Offset(left + boxW, top + boxH - cornerLength), strokeWidth)
+    }
+}
+
+@Composable
+private fun GuidanceBanner(
+    message: String,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        color = KioskNavy,
+        shape = RoundedCornerShape(22.dp),
+        shadowElevation = 10.dp
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 18.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.Default.Security,
+                contentDescription = null,
+                tint = KioskCyan,
+                modifier = Modifier.size(24.dp)
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            Text(
+                text = message,
+                modifier = Modifier.weight(1f),
+                color = Color.White,
+                fontSize = 15.sp,
+                lineHeight = 20.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
+private fun AttendanceConfirmation(
+    state: ConfirmationCardState,
+    modifier: Modifier = Modifier
+) {
+    AnimatedVisibility(
+        visible = state.isVisible,
+        enter = fadeIn(),
+        exit = fadeOut(),
+        modifier = modifier
+    ) {
+        Card(
+            modifier = Modifier
+                .padding(24.dp)
+                .fillMaxWidth()
+                .widthIn(max = 360.dp),
+            shape = RoundedCornerShape(24.dp),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF0F172A)),
+            elevation = CardDefaults.cardElevation(defaultElevation = 16.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(68.dp)
+                        .background(Color(0xFF059669), CircleShape),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.CheckCircle,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(44.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    text = state.employeeName,
+                    color = Color.White,
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = state.department,
+                    color = KioskMuted,
+                    fontSize = 14.sp,
+                    textAlign = TextAlign.Center,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+                Surface(
+                    color = if (state.eventType == "CLOCK_IN") Color(0xFF065F46) else Color(0xFF991B1B),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text(
+                        text = if (state.eventType == "CLOCK_IN") "CLOCKED IN" else "CLOCKED OUT",
+                        color = Color.White,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = state.formattedTime,
+                    color = Color(0xFFCBD5E1),
+                    fontSize = 13.sp,
+                    textAlign = TextAlign.Center
+                )
+            }
         }
     }
 }
