@@ -39,6 +39,7 @@ data class ConfirmationCardState(
     val employeeName: String = "",
     val department: String = "",
     val eventType: String = "",
+    val actionTitle: String = "",
     val formattedTime: String = "",
     val photoPath: String? = null
 )
@@ -158,10 +159,10 @@ class KioskMainViewModel(application: Application) : AndroidViewModel(applicatio
                     )
                 }
             } catch (error: Throwable) {
-                // Camera/ML exceptions must never terminate the kiosk process.
                 Log.e(TAG, "Frame analysis failed", error)
                 _analysisResult.value = null
                 livenessEngine.reset()
+                multiFrameConsensus.clearAll()
             } finally {
                 recycleSafely(frameBitmap)
                 isFrameProcessing.set(false)
@@ -190,28 +191,38 @@ class KioskMainViewModel(application: Application) : AndroidViewModel(applicatio
                     qualityScore = qualityScore,
                     modelVersion = embeddingGenerator.modelVersion,
                     terminalMode = settings.terminalMode,
-                    cooldownSeconds = settings.cooldownSeconds
+                    cooldownSeconds = settings.cooldownSeconds,
+                    deviceId = settings.deviceId,
+                    timeZoneId = settings.timeZoneId
                 )
 
                 if (ruleResult is AttendanceRuleResult.Success) {
                     if (settings.soundAlertsEnabled) playSuccessBeep()
+
+                    val actionTitle = when {
+                        ruleResult.eventType == "CLOCK_IN" -> "Clock-in saved"
+                        ruleResult.updatedExistingClockOut -> "Clock-out updated"
+                        else -> "Clock-out saved"
+                    }
 
                     _confirmationState.value = ConfirmationCardState(
                         isVisible = true,
                         employeeName = employee?.fullName ?: "Employee #$employeeId",
                         department = employee?.department ?: "General",
                         eventType = ruleResult.eventType,
+                        actionTitle = actionTitle,
                         formattedTime = ruleResult.message,
                         photoPath = employee?.photoPath
                     )
 
-                    delay(3_200L)
+                    delay(3_000L)
                     _confirmationState.value = ConfirmationCardState()
                     livenessEngine.reset()
                     multiFrameConsensus.clearAll()
                 }
             } catch (error: Throwable) {
                 Log.e(TAG, "Attendance recording failed", error)
+                multiFrameConsensus.clearAll()
             } finally {
                 isAttendanceProcessing.set(false)
             }
