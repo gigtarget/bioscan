@@ -19,7 +19,6 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
@@ -59,7 +58,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.bioscan.core.camera.CameraManager
 import com.example.bioscan.core.common.TimeUtils
 import com.example.bioscan.core.recognition.IdentityDecision
-import com.example.bioscan.presentation.viewmodel.ConfirmationCardState
 import com.example.bioscan.presentation.viewmodel.KioskMainViewModel
 import kotlinx.coroutines.delay
 
@@ -112,7 +110,9 @@ fun ScannerScreen(
                     cameraManager.startCamera(
                         lifecycleOwner = lifecycleOwner,
                         surfaceProvider = surfaceProvider,
-                        onFrameAvailable = viewModel::processFrame
+                        onFrameAvailable = { bitmap, rotation ->
+                            viewModel.processFrame(bitmap, rotation)
+                        }
                     )
                 }
             },
@@ -182,7 +182,7 @@ private fun KioskHeader(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column(modifier = Modifier.weight(1f)) {
+                Column(modifier = Modifier.widthIn(max = 260.dp)) {
                     Text(
                         text = "BioScan Kiosk",
                         color = Color.White,
@@ -234,13 +234,11 @@ private fun KioskHeader(
             ) {
                 CompactStatusPill(
                     label = "Camera ready",
-                    color = KioskGreen,
-                    modifier = Modifier.weight(1f)
+                    color = KioskGreen
                 )
                 CompactStatusPill(
-                    label = "Works offline",
-                    color = KioskCyan,
-                    modifier = Modifier.weight(1f)
+                    label = "Offline",
+                    color = KioskCyan
                 )
             }
         }
@@ -336,24 +334,36 @@ private fun GuidanceBanner(
         shape = RoundedCornerShape(22.dp),
         shadowElevation = 10.dp
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 18.dp, vertical = 14.dp),
-            verticalAlignment = Alignment.CenterVertically
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 18.dp, vertical = 13.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Icon(
-                imageVector = Icons.Default.Security,
-                contentDescription = null,
-                tint = KioskCyan,
-                modifier = Modifier.size(24.dp)
-            )
-            Spacer(modifier = Modifier.width(12.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.Security,
+                    contentDescription = null,
+                    tint = KioskCyan,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Face attendance",
+                    color = KioskCyan,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            Spacer(modifier = Modifier.height(5.dp))
             Text(
                 text = message,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.fillMaxWidth(),
                 color = Color.White,
                 fontSize = 15.sp,
                 lineHeight = 20.sp,
                 fontWeight = FontWeight.SemiBold,
+                textAlign = TextAlign.Center,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
@@ -363,7 +373,7 @@ private fun GuidanceBanner(
 
 @Composable
 private fun AttendanceConfirmation(
-    state: ConfirmationCardState,
+    state: com.example.bioscan.presentation.viewmodel.ConfirmationCardState,
     modifier: Modifier = Modifier
 ) {
     AnimatedVisibility(
