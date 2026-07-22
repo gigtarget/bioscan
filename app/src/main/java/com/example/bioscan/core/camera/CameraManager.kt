@@ -3,6 +3,7 @@ package com.example.bioscan.core.camera
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Matrix
+import android.util.Log
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
@@ -10,96 +11,137 @@ import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
+import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
-class CameraManager(private val context: Context) {
+private const val TAG = "BioScanCamera"
 
-    private val executor = Executors.newSingleThreadExecutor()
+class CameraManager(context: Context) {
+
+    private val appContext = context.applicationContext
+    private val executor: ExecutorService = Executors.newSingleThreadExecutor()
     private var cameraProvider: ProcessCameraProvider? = null
+    private var imageAnalysis: ImageAnalysis? = null
+
     @Volatile
-    private var isStopped = false
+    private var isReleased = false
 
     fun startCamera(
         lifecycleOwner: LifecycleOwner,
         surfaceProvider: Preview.SurfaceProvider,
         onFrameAvailable: (Bitmap, Int) -> Unit
     ) {
-        isStopped = false
-        val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
+        if (isReleased) return
+
+        val cameraProviderFuture = ProcessCameraProvider.getInstance(appContext)
         cameraProviderFuture.addListener({
-            try {
-                cameraProvider = cameraProviderFuture.get()
+            if (isReleased) return@addListener
+
+            runCatching {
+                val provider = cameraProviderFuture.get()
+                cameraProvider = provider
 
                 val preview = Preview.Builder().build().also {
                     it.surfaceProvider = surfaceProvider
                 }
 
-                val imageAnalysis = ImageAnalysis.Builder()
+                val analyzer = ImageAnalysis.Builder()
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
                     .build()
 
-                imageAnalysis.setAnalyzer(executor) { imageProxy ->
+                imageAnalysis = analyzer
+                analyzer.setAnalyzer(executor) { imageProxy ->
                     try {
-                        if (!isStopped) {
-                            val rotationDegrees = imageProxy.imageInfo.rotationDegrees
-                            val bitmap = imageProxyToBitmap(imageProxy)
-                            if (bitmap != null && !isStopped) {
-                                onFrameAvailable(bitmap, rotationDegrees)
+                        if (!isReleased) {
+                            val bitmap = imageProxyToOrientedBitmap(imageProxy)
+                            if (bitmap != null && !isReleased) {
+                                onFrameAvailable(bitmap, 0)
+                            } else {
+                                bitmap?.recycle()
                             }
                         }
-                    } catch (e: Exception) {
-                        e.printStackTrace()
+                    } catch (error: Throwable) {
+                        Log.e(TAG, "Camera frame processing failed", error)
                     } finally {
                         imageProxy.close()
                     }
                 }
 
-                val cameraSelector = CameraSelector.DEFAULT_FRONT_CAMERA
-
-                cameraProvider?.unbindAll()
-                if (!isStopped) {
-                    cameraProvider?.bindToLifecycle(
-                        lifecycleOwner,
-                        cameraSelector,
-                        preview,
-                        imageAnalysis
-                    )
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
+                provider.unbindAll()
+                provider.bindToLifecycle(
+                    lifecycleOwner,
+                    CameraSelector.DEFAULT_FRONT_CAMERA,
+                    preview,
+                    analyzer
+                )
+            }.onFailure { error ->
+                Log.e(TAG, "Unable to start front camera", error)
             }
-        }, ContextCompat.getMainExecutor(context))
+        }, ContextCompat.getMainExecutor(appContext))
     }
 
-    private fun imageProxyToBitmap(imageProxy: ImageProxy): Bitmap? {
-        return try {
-            val bitmap = Bitmap.createBitmap(
-                imageProxy.width,
+    private fun imageProxyToOrientedBitmap(imageProxy: ImageProxy): Bitmap? {
+        return runCatching {
+            val plane = imageProxy.planes.first()
+            val buffer = plane.buffer.apply { rewind() }
+            val pixelStride = plane.pixelStride
+            val rowStride = plane.rowStride
+            val rowPadding = rowStride - pixelStride * imageProxy.width
+            val paddedWidth = imageProxy.width + rowPadding / pixelStride
+
+            val paddedBitmap = Bitmap.createBitmap(
+                paddedWidth,
                 imageProxy.height,
                 Bitmap.Config.ARGB_8888
             )
-            val buffer = imageProxy.planes[0].buffer
-            buffer.rewind()
-            bitmap.copyPixelsFromBuffer(buffer)
+            paddedBitmap.copyPixelsFromBuffer(buffer)
 
-            // Mirror horizontally for front camera if needed
-            val matrix = Matrix().apply {
-                postScale(-1f, 1f, imageProxy.width / 2f, imageProxy.height / 2f)
+            val croppedBitmap = Bitmap.createBitmap(
+                paddedBitmap,
+                0,
+                0,
+                imageProxy.width,
+                imageProxy.height
+            )
+            if (croppedBitmap !== paddedBitmap) paddedBitmap.recycle()
+
+            val transform = Matrix().apply {
+                postRotate(imageProxy.imageInfo.rotationDegrees.toFloat())
+                postScale(-1f, 1f)
             }
-            Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
-        } catch (e: Exception) {
-            e.printStackTrace()
-            null
-        }
+
+            val orientedBitmap = Bitmap.createBitmap(
+                croppedBitmap,
+                0,
+                0,
+                croppedBitmap.width,
+                croppedBitmap.height,
+                transform,
+                true
+            )
+            if (orientedBitmap !== croppedBitmap) croppedBitmap.recycle()
+            orientedBitmap
+        }.onFailure { error ->
+            Log.e(TAG, "Unable to convert camera frame", error)
+        }.getOrNull()
     }
 
     fun stopCamera() {
-        isStopped = true
-        try {
+        runCatching {
+            imageAnalysis?.clearAnalyzer()
             cameraProvider?.unbindAll()
-        } catch (e: Exception) {
-            e.printStackTrace()
+        }.onFailure { error ->
+            Log.w(TAG, "Unable to stop camera cleanly", error)
         }
+    }
+
+    fun release() {
+        if (isReleased) return
+        isReleased = true
+        stopCamera()
+        imageAnalysis = null
+        cameraProvider = null
+        executor.shutdownNow()
     }
 }
