@@ -33,6 +33,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 private const val TAG = "BioScanKiosk"
+private const val NO_FACE_FRAMES_TO_RELEASE_PRESENCE = 3
 
 data class ConfirmationCardState(
     val isVisible: Boolean = false,
@@ -82,6 +83,10 @@ class KioskMainViewModel(application: Application) : AndroidViewModel(applicatio
     private var toneGenerator: ToneGenerator? = null
     private val isFrameProcessing = AtomicBoolean(false)
     private val isAttendanceProcessing = AtomicBoolean(false)
+
+    // Prevents one continuous camera presence from generating multiple attendance actions.
+    private var blockedEmployeeIdForCurrentPresence: String? = null
+    private var consecutiveNoFaceFrames = 0
 
     init {
         try {
@@ -143,13 +148,17 @@ class KioskMainViewModel(application: Application) : AndroidViewModel(applicatio
                     currentMargin = settings.recognitionMargin
                 )
                 _analysisResult.value = result
+                updatePresenceGate(result)
 
                 val match = result.candidateMatch
                 if (
                     match != null &&
                     match.decision == IdentityDecision.MATCH &&
-                    match.employeeId.isNotBlank()
+                    match.employeeId.isNotBlank() &&
+                    match.employeeId != blockedEmployeeIdForCurrentPresence
                 ) {
+                    // Lock immediately, including cooldown/error outcomes, until the face leaves view.
+                    blockedEmployeeIdForCurrentPresence = match.employeeId
                     triggerAttendanceRecord(
                         employeeId = match.employeeId,
                         score = match.similarityScore,
@@ -167,6 +176,20 @@ class KioskMainViewModel(application: Application) : AndroidViewModel(applicatio
                 recycleSafely(frameBitmap)
                 isFrameProcessing.set(false)
             }
+        }
+    }
+
+    private fun updatePresenceGate(result: FrameAnalysisResult) {
+        if (result.faceDetected) {
+            consecutiveNoFaceFrames = 0
+            return
+        }
+
+        consecutiveNoFaceFrames++
+        if (consecutiveNoFaceFrames >= NO_FACE_FRAMES_TO_RELEASE_PRESENCE) {
+            blockedEmployeeIdForCurrentPresence = null
+            consecutiveNoFaceFrames = 0
+            multiFrameConsensus.clearAll()
         }
     }
 
