@@ -39,29 +39,46 @@ jobs:
         shell: bash
         run: sdkmanager --install 'platforms;android-36' 'build-tools;36.0.0'
 
+      - name: Restore persistent development signing key
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: bioscan-compatible-debug-keystore-v1
+
       - name: Set up Gradle 9.3.1
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.3.1'
 
-      - name: Build debug APK
+      - name: Build compatibility APK
         shell: bash
         run: |
           set -o pipefail
           gradle --no-daemon :app:assembleDebug --stacktrace --warning-mode all 2>&1 | tee build.log
 
-      - name: Upload build log
+      - name: Verify APK signature and alignment
+        shell: bash
+        run: |
+          APK='app/build/outputs/apk/debug/app-debug.apk'
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs "$APK" | tee apk-info.txt
+          "$ANDROID_HOME/build-tools/36.0.0/zipalign" -c -P 16 -v 4 "$APK" | tee -a apk-info.txt
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$APK" | head -n 12 | tee -a apk-info.txt
+          cp "$APK" BioScan-Kiosk-Compat.apk
+
+      - name: Upload build diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: BioScan-build-log
-          path: build.log
+          name: BioScan-build-diagnostics
+          path: |
+            build.log
+            apk-info.txt
           if-no-files-found: warn
 
       - name: Upload installable APK
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: BioScan-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: BioScan-Kiosk-Compat-apk
+          path: BioScan-Kiosk-Compat.apk
           if-no-files-found: error
