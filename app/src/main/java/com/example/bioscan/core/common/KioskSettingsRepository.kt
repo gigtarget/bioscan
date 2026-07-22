@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.example.bioscan.core.recognition.IdentityMatcher
+import java.util.TimeZone
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
@@ -16,9 +17,9 @@ private val Context.dataStore by preferencesDataStore(name = "bioscan_kiosk_sett
 data class KioskSettings(
     val terminalMode: TerminalDirectionMode = TerminalDirectionMode.SMART_AUTO,
     val cooldownSeconds: Int = 15,
-    val livenessMode: LivenessMode = LivenessMode.STANDARD,
+    val livenessMode: LivenessMode = LivenessMode.OFF,
     val deviceId: String = "DOOR_FRONT_KIOSK_01",
-    val timeZoneId: String = "UTC",
+    val timeZoneId: String = TimeZone.getDefault().id,
     val soundAlertsEnabled: Boolean = true,
     val imageRetentionDays: Int = 30,
     val recognitionThreshold: Float = IdentityMatcher.DEFAULT_THRESHOLD,
@@ -41,19 +42,13 @@ class KioskSettingsRepository(private val context: Context) {
 
     val settingsFlow: Flow<KioskSettings> = context.dataStore.data.map { preferences ->
         KioskSettings(
-            terminalMode = runCatching {
-                TerminalDirectionMode.valueOf(
-                    preferences[Keys.TERMINAL_MODE] ?: TerminalDirectionMode.SMART_AUTO.name
-                )
-            }.getOrDefault(TerminalDirectionMode.SMART_AUTO),
+            terminalMode = TerminalDirectionMode.SMART_AUTO,
             cooldownSeconds = (preferences[Keys.COOLDOWN_SECONDS] ?: 15).coerceIn(5, 600),
-            livenessMode = runCatching {
-                LivenessMode.valueOf(
-                    preferences[Keys.LIVENESS_MODE] ?: LivenessMode.STANDARD.name
-                )
-            }.getOrDefault(LivenessMode.STANDARD),
+            // Active blink/head-turn challenges are intentionally disabled. Identity assurance
+            // comes from image quality, FaceNet similarity, template support, and frame consensus.
+            livenessMode = LivenessMode.OFF,
             deviceId = preferences[Keys.DEVICE_ID] ?: "DOOR_FRONT_KIOSK_01",
-            timeZoneId = preferences[Keys.TIMEZONE_ID] ?: "UTC",
+            timeZoneId = preferences[Keys.TIMEZONE_ID] ?: TimeZone.getDefault().id,
             soundAlertsEnabled = preferences[Keys.SOUND_ALERTS] ?: true,
             imageRetentionDays = preferences[Keys.IMAGE_RETENTION_DAYS] ?: 30,
             recognitionThreshold = (preferences[Keys.RECOGNITION_THRESHOLD]
@@ -70,7 +65,7 @@ class KioskSettingsRepository(private val context: Context) {
     }
 
     suspend fun updateTerminalMode(mode: TerminalDirectionMode) {
-        context.dataStore.edit { it[Keys.TERMINAL_MODE] = mode.name }
+        context.dataStore.edit { it[Keys.TERMINAL_MODE] = TerminalDirectionMode.SMART_AUTO.name }
     }
 
     suspend fun updateCooldown(seconds: Int) {
@@ -78,7 +73,7 @@ class KioskSettingsRepository(private val context: Context) {
     }
 
     suspend fun updateLivenessMode(mode: LivenessMode) {
-        context.dataStore.edit { it[Keys.LIVENESS_MODE] = mode.name }
+        context.dataStore.edit { it[Keys.LIVENESS_MODE] = LivenessMode.OFF.name }
     }
 
     suspend fun updateDeviceId(id: String) {

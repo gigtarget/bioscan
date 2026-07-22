@@ -33,12 +33,14 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 private const val TAG = "BioScanKiosk"
+private const val NO_FACE_FRAMES_TO_RELEASE_PRESENCE = 3
 
 data class ConfirmationCardState(
     val isVisible: Boolean = false,
     val employeeName: String = "",
     val department: String = "",
     val eventType: String = "",
+    val actionTitle: String = "",
     val formattedTime: String = "",
     val photoPath: String? = null
 )
@@ -81,6 +83,10 @@ class KioskMainViewModel(application: Application) : AndroidViewModel(applicatio
     private var toneGenerator: ToneGenerator? = null
     private val isFrameProcessing = AtomicBoolean(false)
     private val isAttendanceProcessing = AtomicBoolean(false)
+
+    // Prevents one continuous camera presence from generating multiple attendance actions.
+    private var blockedEmployeeIdForCurrentPresence: String? = null
+    private var consecutiveNoFaceFrames = 0
 
     init {
         try {
@@ -142,13 +148,17 @@ class KioskMainViewModel(application: Application) : AndroidViewModel(applicatio
                     currentMargin = settings.recognitionMargin
                 )
                 _analysisResult.value = result
+                updatePresenceGate(result)
 
                 val match = result.candidateMatch
                 if (
                     match != null &&
                     match.decision == IdentityDecision.MATCH &&
-                    match.employeeId.isNotBlank()
+                    match.employeeId.isNotBlank() &&
+                    match.employeeId != blockedEmployeeIdForCurrentPresence
                 ) {
+                    // Lock immediately, including cooldown/error outcomes, until the face leaves view.
+                    blockedEmployeeIdForCurrentPresence = match.employeeId
                     triggerAttendanceRecord(
                         employeeId = match.employeeId,
                         score = match.similarityScore,
@@ -158,14 +168,28 @@ class KioskMainViewModel(application: Application) : AndroidViewModel(applicatio
                     )
                 }
             } catch (error: Throwable) {
-                // Camera/ML exceptions must never terminate the kiosk process.
                 Log.e(TAG, "Frame analysis failed", error)
                 _analysisResult.value = null
                 livenessEngine.reset()
+                multiFrameConsensus.clearAll()
             } finally {
                 recycleSafely(frameBitmap)
                 isFrameProcessing.set(false)
             }
+        }
+    }
+
+    private fun updatePresenceGate(result: FrameAnalysisResult) {
+        if (result.faceDetected) {
+            consecutiveNoFaceFrames = 0
+            return
+        }
+
+        consecutiveNoFaceFrames++
+        if (consecutiveNoFaceFrames >= NO_FACE_FRAMES_TO_RELEASE_PRESENCE) {
+            blockedEmployeeIdForCurrentPresence = null
+            consecutiveNoFaceFrames = 0
+            multiFrameConsensus.clearAll()
         }
     }
 
@@ -190,28 +214,38 @@ class KioskMainViewModel(application: Application) : AndroidViewModel(applicatio
                     qualityScore = qualityScore,
                     modelVersion = embeddingGenerator.modelVersion,
                     terminalMode = settings.terminalMode,
-                    cooldownSeconds = settings.cooldownSeconds
+                    cooldownSeconds = settings.cooldownSeconds,
+                    deviceId = settings.deviceId,
+                    timeZoneId = settings.timeZoneId
                 )
 
                 if (ruleResult is AttendanceRuleResult.Success) {
                     if (settings.soundAlertsEnabled) playSuccessBeep()
+
+                    val actionTitle = when {
+                        ruleResult.eventType == "CLOCK_IN" -> "Clock-in saved"
+                        ruleResult.updatedExistingClockOut -> "Clock-out updated"
+                        else -> "Clock-out saved"
+                    }
 
                     _confirmationState.value = ConfirmationCardState(
                         isVisible = true,
                         employeeName = employee?.fullName ?: "Employee #$employeeId",
                         department = employee?.department ?: "General",
                         eventType = ruleResult.eventType,
+                        actionTitle = actionTitle,
                         formattedTime = ruleResult.message,
                         photoPath = employee?.photoPath
                     )
 
-                    delay(3_200L)
+                    delay(3_000L)
                     _confirmationState.value = ConfirmationCardState()
                     livenessEngine.reset()
                     multiFrameConsensus.clearAll()
                 }
             } catch (error: Throwable) {
                 Log.e(TAG, "Attendance recording failed", error)
+                multiFrameConsensus.clearAll()
             } finally {
                 isAttendanceProcessing.set(false)
             }

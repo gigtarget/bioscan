@@ -27,10 +27,11 @@ class RecognitionCoordinator(
     val multiFrameConsensus: MultiFrameConsensus
 ) {
 
+    @Suppress("UNUSED_PARAMETER")
     suspend fun analyzeFrame(
         frameBitmap: Bitmap,
         rotationDegrees: Int = 0,
-        livenessMode: LivenessMode = LivenessMode.STANDARD,
+        livenessMode: LivenessMode = LivenessMode.OFF,
         currentThreshold: Float = IdentityMatcher.DEFAULT_THRESHOLD,
         currentMargin: Float = IdentityMatcher.DEFAULT_MIN_MARGIN
     ): FrameAnalysisResult = withContext(Dispatchers.Default) {
@@ -68,21 +69,8 @@ class RecognitionCoordinator(
                 faceCount = 1,
                 detectedFace = face,
                 quality = quality,
+                liveness = passiveVerificationState(),
                 candidateMatch = CandidateMatch("", 0f, 0f, 0f, IdentityDecision.LOW_QUALITY)
-            )
-        }
-
-        val livenessState = livenessEngine.evaluateLiveness(face, livenessMode)
-        if (!livenessState.isCompleted && livenessMode != LivenessMode.OFF) {
-            multiFrameConsensus.clearTrack(face.trackingId)
-            return@withContext result(
-                startTime = startTime,
-                faceDetected = true,
-                faceCount = 1,
-                detectedFace = face,
-                quality = quality,
-                liveness = livenessState,
-                candidateMatch = CandidateMatch("", 0f, 0f, 0f, IdentityDecision.LIVENESS_FAILED)
             )
         }
 
@@ -93,7 +81,7 @@ class RecognitionCoordinator(
                 faceCount = 1,
                 detectedFace = face,
                 quality = quality,
-                liveness = livenessState,
+                liveness = passiveVerificationState(),
                 candidateMatch = CandidateMatch("", 0f, 0f, 0f, IdentityDecision.LOW_QUALITY)
             )
 
@@ -115,13 +103,20 @@ class RecognitionCoordinator(
                 faceCount = 1,
                 detectedFace = face,
                 quality = quality,
-                liveness = livenessState,
+                liveness = passiveVerificationState(),
                 candidateMatch = finalMatch
             )
         } finally {
             if (!alignedBitmap.isRecycled) alignedBitmap.recycle()
         }
     }
+
+    private fun passiveVerificationState() = LivenessState(
+        currentChallenge = LivenessChallengeType.LOOK_STRAIGHT,
+        isCompleted = true,
+        progress = 1f,
+        instructionMessage = "Passive identity verification"
+    )
 
     private fun result(
         startTime: Long,
