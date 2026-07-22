@@ -1,6 +1,7 @@
 package com.example.bioscan.core.recognition
 
 import com.example.bioscan.core.common.LivenessMode
+import kotlin.math.abs
 import kotlin.random.Random
 
 enum class LivenessChallengeType {
@@ -14,119 +15,157 @@ enum class LivenessChallengeType {
 data class LivenessState(
     val currentChallenge: LivenessChallengeType,
     val isCompleted: Boolean,
-    val progress: Float, // 0.0 to 1.0
+    val progress: Float,
     val instructionMessage: String
 )
 
 class LivenessEngine {
 
-    private var activeChallengeSequence = listOf<LivenessChallengeType>()
+    private val stateLock = Any()
+    private var activeChallengeSequence = emptyList<LivenessChallengeType>()
     private var currentChallengeIndex = 0
     private var isBlinkDetected = false
     private var challengeStartTimeMs = 0L
+    private var completedAtMs = 0L
+    private var activeTrackingId: Int? = null
+    private var consecutiveChallengeFrames = 0
 
-    fun startNewChallengeSequence(mode: LivenessMode) {
-        challengeStartTimeMs = System.currentTimeMillis()
-        isBlinkDetected = false
+    fun reset() = synchronized(stateLock) {
+        activeChallengeSequence = emptyList()
         currentChallengeIndex = 0
+        isBlinkDetected = false
+        challengeStartTimeMs = 0L
+        completedAtMs = 0L
+        activeTrackingId = null
+        consecutiveChallengeFrames = 0
+    }
 
+    fun startNewChallengeSequence(mode: LivenessMode, trackingId: Int? = null) = synchronized(stateLock) {
+        startNewChallengeSequenceLocked(mode, trackingId)
+    }
+
+    fun evaluateLiveness(faceResult: DetectedFaceResult, mode: LivenessMode): LivenessState =
+        synchronized(stateLock) {
+            if (mode == LivenessMode.OFF) {
+                return@synchronized completedState("Liveness disabled")
+            }
+
+            val now = System.currentTimeMillis()
+            val trackingId = faceResult.trackingId
+            val faceChanged = activeTrackingId != null && trackingId != null && activeTrackingId != trackingId
+
+            if (activeChallengeSequence.isEmpty() || faceChanged) {
+                startNewChallengeSequenceLocked(mode, trackingId)
+            }
+
+            if (currentChallengeIndex >= activeChallengeSequence.size) {
+                if (completedAtMs == 0L) completedAtMs = now
+                if (now - completedAtMs <= COMPLETION_HOLD_MS) {
+                    return@synchronized completedState("Liveness verified")
+                }
+                startNewChallengeSequenceLocked(mode, trackingId)
+            }
+
+            if (now - challengeStartTimeMs > CHALLENGE_TIMEOUT_MS) {
+                startNewChallengeSequenceLocked(mode, trackingId)
+            }
+
+            val currentChallenge = activeChallengeSequence.getOrNull(currentChallengeIndex)
+                ?: return@synchronized completedState("Liveness verified")
+
+            val challengePassed = when (currentChallenge) {
+                LivenessChallengeType.LOOK_STRAIGHT -> {
+                    abs(faceResult.headEulerAngleYaw) < 12f &&
+                        abs(faceResult.headEulerAnglePitch) < 12f
+                }
+
+                LivenessChallengeType.BLINK -> {
+                    val leftOpen = faceResult.leftEyeOpenProbability ?: 1f
+                    val rightOpen = faceResult.rightEyeOpenProbability ?: 1f
+                    if (leftOpen < 0.25f && rightOpen < 0.25f) {
+                        isBlinkDetected = true
+                    }
+                    isBlinkDetected && leftOpen > 0.65f && rightOpen > 0.65f
+                }
+
+                LivenessChallengeType.TURN_LEFT -> faceResult.headEulerAngleYaw < -18f
+                LivenessChallengeType.TURN_RIGHT -> faceResult.headEulerAngleYaw > 18f
+                LivenessChallengeType.SMILE -> (faceResult.smilingProbability ?: 0f) > 0.6f
+            }
+
+            if (challengePassed) {
+                consecutiveChallengeFrames++
+            } else {
+                consecutiveChallengeFrames = 0
+            }
+
+            val requiredFrames = if (currentChallenge == LivenessChallengeType.BLINK) 1 else 2
+            if (consecutiveChallengeFrames >= requiredFrames) {
+                advanceToNextChallengeLocked(now)
+            }
+
+            val completed = currentChallengeIndex >= activeChallengeSequence.size
+            if (completed) {
+                return@synchronized completedState("Liveness verified")
+            }
+
+            val nextChallenge = activeChallengeSequence[currentChallengeIndex]
+            LivenessState(
+                currentChallenge = nextChallenge,
+                isCompleted = false,
+                progress = currentChallengeIndex.toFloat() / activeChallengeSequence.size.toFloat(),
+                instructionMessage = instructionFor(nextChallenge)
+            )
+        }
+
+    private fun startNewChallengeSequenceLocked(mode: LivenessMode, trackingId: Int?) {
         activeChallengeSequence = when (mode) {
             LivenessMode.OFF -> listOf(LivenessChallengeType.LOOK_STRAIGHT)
-            LivenessMode.STANDARD -> {
-                val challenges = mutableListOf(LivenessChallengeType.LOOK_STRAIGHT)
-                val randomChallenge = if (Random.nextBoolean()) LivenessChallengeType.BLINK else LivenessChallengeType.TURN_LEFT
-                challenges.add(randomChallenge)
-                challenges
-            }
-            LivenessMode.STRICT -> {
-                listOf(
-                    LivenessChallengeType.LOOK_STRAIGHT,
-                    LivenessChallengeType.BLINK,
-                    if (Random.nextBoolean()) LivenessChallengeType.TURN_LEFT else LivenessChallengeType.TURN_RIGHT
-                )
-            }
+            LivenessMode.STANDARD -> listOf(
+                LivenessChallengeType.LOOK_STRAIGHT,
+                if (Random.nextBoolean()) LivenessChallengeType.BLINK else LivenessChallengeType.TURN_LEFT
+            )
+            LivenessMode.STRICT -> listOf(
+                LivenessChallengeType.LOOK_STRAIGHT,
+                LivenessChallengeType.BLINK,
+                if (Random.nextBoolean()) LivenessChallengeType.TURN_LEFT else LivenessChallengeType.TURN_RIGHT
+            )
+        }
+        currentChallengeIndex = 0
+        isBlinkDetected = false
+        challengeStartTimeMs = System.currentTimeMillis()
+        completedAtMs = 0L
+        activeTrackingId = trackingId
+        consecutiveChallengeFrames = 0
+    }
+
+    private fun advanceToNextChallengeLocked(now: Long) {
+        currentChallengeIndex = (currentChallengeIndex + 1).coerceAtMost(activeChallengeSequence.size)
+        isBlinkDetected = false
+        consecutiveChallengeFrames = 0
+        challengeStartTimeMs = now
+        if (currentChallengeIndex >= activeChallengeSequence.size) {
+            completedAtMs = now
         }
     }
 
-    fun evaluateLiveness(faceResult: DetectedFaceResult, mode: LivenessMode): LivenessState {
-        if (mode == LivenessMode.OFF) {
-            return LivenessState(LivenessChallengeType.LOOK_STRAIGHT, true, 1.0f, "Liveness Off")
-        }
+    private fun completedState(message: String) = LivenessState(
+        currentChallenge = LivenessChallengeType.LOOK_STRAIGHT,
+        isCompleted = true,
+        progress = 1f,
+        instructionMessage = message
+    )
 
-        if (activeChallengeSequence.isEmpty()) {
-            startNewChallengeSequence(mode)
-        }
-
-        val currentChallenge = activeChallengeSequence[currentChallengeIndex]
-
-        val timeoutMs = 8000L
-        if (System.currentTimeMillis() - challengeStartTimeMs > timeoutMs) {
-            startNewChallengeSequence(mode) // Reset on timeout
-        }
-
-        when (currentChallenge) {
-            LivenessChallengeType.LOOK_STRAIGHT -> {
-                val yaw = Math.abs(faceResult.headEulerAngleYaw)
-                val pitch = Math.abs(faceResult.headEulerAnglePitch)
-                if (yaw < 12f && pitch < 12f) {
-                    advanceToNextChallenge()
-                } else {
-                    return LivenessState(currentChallenge, false, 0.3f, "Look straight into camera")
-                }
-            }
-            LivenessChallengeType.BLINK -> {
-                val leftOpen = faceResult.leftEyeOpenProbability ?: 1.0f
-                val rightOpen = faceResult.rightEyeOpenProbability ?: 1.0f
-
-                // Detect eye closure followed by opening
-                if (leftOpen < 0.25f && rightOpen < 0.25f) {
-                    isBlinkDetected = true
-                }
-                if (isBlinkDetected && leftOpen > 0.65f && rightOpen > 0.65f) {
-                    advanceToNextChallenge()
-                } else {
-                    return LivenessState(currentChallenge, false, 0.5f, "Please blink your eyes")
-                }
-            }
-            LivenessChallengeType.TURN_LEFT -> {
-                val yaw = faceResult.headEulerAngleYaw
-                if (yaw < -18f) {
-                    advanceToNextChallenge()
-                } else {
-                    return LivenessState(currentChallenge, false, 0.5f, "Turn head slightly left")
-                }
-            }
-            LivenessChallengeType.TURN_RIGHT -> {
-                val yaw = faceResult.headEulerAngleYaw
-                if (yaw > 18f) {
-                    advanceToNextChallenge()
-                } else {
-                    return LivenessState(currentChallenge, false, 0.5f, "Turn head slightly right")
-                }
-            }
-            LivenessChallengeType.SMILE -> {
-                val smile = faceResult.smilingProbability ?: 0f
-                if (smile > 0.6f) {
-                    advanceToNextChallenge()
-                } else {
-                    return LivenessState(currentChallenge, false, 0.5f, "Please smile")
-                }
-            }
-        }
-
-        val completed = currentChallengeIndex >= activeChallengeSequence.size
-        val progress = (currentChallengeIndex.toFloat() / activeChallengeSequence.size.toFloat()).coerceIn(0f, 1f)
-        val msg = if (completed) "Liveness verified!" else "Follow prompt..."
-
-        return LivenessState(
-            currentChallenge = if (completed) LivenessChallengeType.LOOK_STRAIGHT else activeChallengeSequence[currentChallengeIndex],
-            isCompleted = completed,
-            progress = progress,
-            instructionMessage = msg
-        )
+    private fun instructionFor(challenge: LivenessChallengeType): String = when (challenge) {
+        LivenessChallengeType.LOOK_STRAIGHT -> "Look straight into the camera"
+        LivenessChallengeType.BLINK -> "Blink your eyes"
+        LivenessChallengeType.TURN_LEFT -> "Turn your head slightly left"
+        LivenessChallengeType.TURN_RIGHT -> "Turn your head slightly right"
+        LivenessChallengeType.SMILE -> "Smile"
     }
 
-    private fun advanceToNextChallenge() {
-        currentChallengeIndex++
+    private companion object {
+        const val CHALLENGE_TIMEOUT_MS = 8_000L
+        const val COMPLETION_HOLD_MS = 1_500L
     }
 }
