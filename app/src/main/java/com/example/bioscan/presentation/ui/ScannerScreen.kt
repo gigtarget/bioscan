@@ -28,8 +28,6 @@ import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.Security
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
@@ -48,7 +46,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -67,16 +64,15 @@ import com.example.bioscan.presentation.viewmodel.ConfirmationCardState
 import com.example.bioscan.presentation.viewmodel.KioskMainViewModel
 import kotlinx.coroutines.delay
 
-private val Ink = Color(0xFF07111F)
-private val Panel = Color(0xEB0B1628)
-private val PanelSoft = Color(0xD9142238)
-private val Cyan = Color(0xFF5EE7F2)
-private val Blue = Color(0xFF60A5FA)
-private val Green = Color(0xFF4ADE80)
-private val Amber = Color(0xFFFBBF24)
-private val Rose = Color(0xFFFB7185)
-private val Muted = Color(0xFFA7B4C8)
-private val Border = Color.White.copy(alpha = 0.14f)
+private val KioskInk = Color(0xFF07111F)
+private val KioskPanel = Color(0xED0B1628)
+private val KioskPanelSoft = Color(0xE1142238)
+private val KioskCyan = Color(0xFF5EE7F2)
+private val KioskBlue = Color(0xFF60A5FA)
+private val KioskGreen = Color(0xFF4ADE80)
+private val KioskAmber = Color(0xFFFBBF24)
+private val KioskRose = Color(0xFFFB7185)
+private val KioskMuted = Color(0xFFA7B4C8)
 
 private data class ScannerPresentation(
     val label: String,
@@ -99,24 +95,25 @@ fun ScannerScreen(
         CameraManager(context.applicationContext)
     }
 
-    var currentTimeText by remember {
+    var timeText by remember {
         mutableStateOf(TimeUtils.formatHourMinute(System.currentTimeMillis()))
     }
-    var currentDateText by remember {
+    var dateText by remember {
         mutableStateOf(TimeUtils.formatDateOnly(System.currentTimeMillis()))
     }
 
     LaunchedEffect(Unit) {
         while (true) {
             val now = System.currentTimeMillis()
-            currentTimeText = TimeUtils.formatHourMinute(now)
-            currentDateText = TimeUtils.formatDateOnly(now)
+            timeText = TimeUtils.formatHourMinute(now)
+            dateText = TimeUtils.formatDateOnly(now)
             delay(1_000L)
         }
     }
 
+    val decision = analysisResult?.candidateMatch?.decision
     val presentation = scannerPresentation(
-        decision = analysisResult?.candidateMatch?.decision,
+        decision = decision,
         faceDetected = analysisResult?.faceDetected == true,
         qualityMessage = analysisResult?.quality?.rejectionReason
     )
@@ -124,11 +121,11 @@ fun ScannerScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Ink)
+            .background(KioskInk)
     ) {
         AndroidView(
-            factory = { ctx ->
-                PreviewView(ctx).apply {
+            factory = { previewContext ->
+                PreviewView(previewContext).apply {
                     scaleType = PreviewView.ScaleType.FILL_CENTER
                     implementationMode = PreviewView.ImplementationMode.COMPATIBLE
                     cameraManager.startCamera(
@@ -151,29 +148,29 @@ fun ScannerScreen(
                 .background(
                     Brush.verticalGradient(
                         colorStops = arrayOf(
-                            0f to Color(0xD907111F),
-                            0.22f to Color(0x4D07111F),
-                            0.52f to Color.Transparent,
-                            0.72f to Color(0x4D07111F),
-                            1f to Color(0xF207111F)
+                            0f to Color(0xE607111F),
+                            0.24f to Color(0x3307111F),
+                            0.56f to Color.Transparent,
+                            0.74f to Color(0x4D07111F),
+                            1f to Color(0xFA07111F)
                         )
                     )
                 )
         )
 
-        FaceGuideOverlay(
-            decision = analysisResult?.candidateMatch?.decision,
+        FaceGuide(
+            decision = decision,
             faceDetected = analysisResult?.faceDetected == true
         )
 
-        ProductionHeader(
-            dateText = currentDateText,
-            timeText = currentTimeText,
+        KioskHeader(
+            dateText = dateText,
+            timeText = timeText,
             onOpenAdmin = onOpenAdmin,
             modifier = Modifier.align(Alignment.TopCenter)
         )
 
-        ScannerStatusPanel(
+        StatusPanel(
             presentation = presentation,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
@@ -189,7 +186,7 @@ fun ScannerScreen(
 }
 
 @Composable
-private fun ProductionHeader(
+private fun KioskHeader(
     dateText: String,
     timeText: String,
     onOpenAdmin: () -> Unit,
@@ -200,9 +197,9 @@ private fun ProductionHeader(
             .statusBarsPadding()
             .fillMaxWidth()
             .padding(horizontal = 14.dp, vertical = 10.dp),
-        color = Panel,
+        color = KioskPanel,
         shape = RoundedCornerShape(24.dp),
-        border = BorderStroke(1.dp, Border),
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.14f)),
         shadowElevation = 14.dp
     ) {
         Box(
@@ -216,15 +213,15 @@ private fun ProductionHeader(
                         modifier = Modifier
                             .size(36.dp)
                             .background(
-                                brush = Brush.linearGradient(listOf(Cyan, Blue)),
-                                shape = RoundedCornerShape(12.dp)
+                                Brush.linearGradient(listOf(KioskCyan, KioskBlue)),
+                                RoundedCornerShape(12.dp)
                             ),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
                             imageVector = Icons.Default.Face,
                             contentDescription = null,
-                            tint = Ink,
+                            tint = KioskInk,
                             modifier = Modifier.size(22.dp)
                         )
                     }
@@ -239,8 +236,8 @@ private fun ProductionHeader(
                             overflow = TextOverflow.Ellipsis
                         )
                         Text(
-                            text = "Private on-device identity verification",
-                            color = Muted,
+                            text = "Private on-device verification",
+                            color = KioskMuted,
                             fontSize = 11.sp,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
@@ -248,9 +245,9 @@ private fun ProductionHeader(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(11.dp))
                 Text(
-                    text = "$currentDateText  •  $timeText",
+                    text = "$dateText  •  $timeText",
                     color = Color.White,
                     fontSize = 13.sp,
                     fontWeight = FontWeight.SemiBold,
@@ -258,10 +255,10 @@ private fun ProductionHeader(
                     overflow = TextOverflow.Ellipsis
                 )
 
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(9.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    StatusChip(label = "FaceNet ready", accent = Green)
-                    StatusChip(label = "Offline-first", accent = Cyan)
+                    HeaderChip("FaceNet ready", KioskGreen)
+                    HeaderChip("Offline-first", KioskCyan)
                 }
             }
 
@@ -275,7 +272,7 @@ private fun ProductionHeader(
                 Surface(
                     color = Color.White.copy(alpha = 0.08f),
                     shape = CircleShape,
-                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.12f))
+                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.13f))
                 ) {
                     Box(
                         modifier = Modifier.size(42.dp),
@@ -295,14 +292,14 @@ private fun ProductionHeader(
 }
 
 @Composable
-private fun StatusChip(label: String, accent: Color) {
+private fun HeaderChip(label: String, accent: Color) {
     Surface(
         color = accent.copy(alpha = 0.12f),
         shape = RoundedCornerShape(50.dp),
         border = BorderStroke(1.dp, accent.copy(alpha = 0.20f))
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+            modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Box(
@@ -310,11 +307,11 @@ private fun StatusChip(label: String, accent: Color) {
                     .size(7.dp)
                     .background(accent, CircleShape)
             )
-            Spacer(modifier = Modifier.width(7.dp))
+            Spacer(modifier = Modifier.width(6.dp))
             Text(
                 text = label,
                 color = accent,
-                fontSize = 11.sp,
+                fontSize = 10.sp,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1
             )
@@ -323,77 +320,62 @@ private fun StatusChip(label: String, accent: Color) {
 }
 
 @Composable
-private fun FaceGuideOverlay(
+private fun FaceGuide(
     decision: IdentityDecision?,
     faceDetected: Boolean
 ) {
     Canvas(modifier = Modifier.fillMaxSize()) {
-        val canvasWidth = size.width
-        val canvasHeight = size.height
-        val guideWidth = (canvasWidth * 0.70f).coerceAtMost(320.dp.toPx())
-        val guideHeight = (guideWidth * 1.26f).coerceAtMost(canvasHeight * 0.45f)
-        val left = (canvasWidth - guideWidth) / 2f
-        val top = (canvasHeight * 0.49f - guideHeight / 2f).coerceAtLeast(canvasHeight * 0.23f)
-        val cornerRadius = 42.dp.toPx()
-        val strokeWidth = 2.dp.toPx()
-        val accentWidth = 5.dp.toPx()
+        val guideWidth = (size.width * 0.70f).coerceAtMost(320.dp.toPx())
+        val guideHeight = (guideWidth * 1.24f).coerceAtMost(size.height * 0.44f)
+        val left = (size.width - guideWidth) / 2f
+        val top = (size.height * 0.49f - guideHeight / 2f).coerceAtLeast(size.height * 0.23f)
+        val radius = 42.dp.toPx()
         val accentLength = 34.dp.toPx()
+        val accentWidth = 5.dp.toPx()
 
         val accent = when (decision) {
-            IdentityDecision.MATCH -> Green
-            IdentityDecision.LOW_QUALITY -> Rose
-            IdentityDecision.MULTIPLE_FACES -> Amber
-            IdentityDecision.UNKNOWN -> Rose
-            IdentityDecision.AMBIGUOUS -> Blue
-            else -> if (faceDetected) Blue else Cyan
+            IdentityDecision.MATCH -> KioskGreen
+            IdentityDecision.LOW_QUALITY, IdentityDecision.UNKNOWN -> KioskRose
+            IdentityDecision.MULTIPLE_FACES -> KioskAmber
+            IdentityDecision.AMBIGUOUS -> KioskBlue
+            else -> if (faceDetected) KioskBlue else KioskCyan
         }
 
         val dim = Color.Black.copy(alpha = 0.38f)
-        drawRect(dim, Offset.Zero, Size(canvasWidth, top))
-        drawRect(
-            dim,
-            Offset(0f, top + guideHeight),
-            Size(canvasWidth, (canvasHeight - top - guideHeight).coerceAtLeast(0f))
-        )
+        drawRect(dim, Offset.Zero, Size(size.width, top))
+        drawRect(dim, Offset(0f, top + guideHeight), Size(size.width, size.height - top - guideHeight))
         drawRect(dim, Offset(0f, top), Size(left, guideHeight))
-        drawRect(
-            dim,
-            Offset(left + guideWidth, top),
-            Size((canvasWidth - left - guideWidth).coerceAtLeast(0f), guideHeight)
-        )
+        drawRect(dim, Offset(left + guideWidth, top), Size(size.width - left - guideWidth, guideHeight))
 
         drawRoundRect(
-            color = Color.White.copy(alpha = 0.30f),
+            color = Color.White.copy(alpha = 0.28f),
             topLeft = Offset(left, top),
             size = Size(guideWidth, guideHeight),
-            cornerRadius = CornerRadius(cornerRadius, cornerRadius),
-            style = Stroke(
-                width = strokeWidth,
-                pathEffect = PathEffect.dashPathEffect(floatArrayOf(12.dp.toPx(), 10.dp.toPx()))
-            )
+            cornerRadius = CornerRadius(radius, radius),
+            style = Stroke(width = 2.dp.toPx())
         )
 
-        drawLine(accent, Offset(left, top + cornerRadius), Offset(left, top + accentLength + cornerRadius), accentWidth)
-        drawLine(accent, Offset(left + cornerRadius, top), Offset(left + accentLength + cornerRadius, top), accentWidth)
-        drawLine(accent, Offset(left + guideWidth - cornerRadius, top), Offset(left + guideWidth - cornerRadius - accentLength, top), accentWidth)
-        drawLine(accent, Offset(left + guideWidth, top + cornerRadius), Offset(left + guideWidth, top + cornerRadius + accentLength), accentWidth)
-        drawLine(accent, Offset(left, top + guideHeight - cornerRadius), Offset(left, top + guideHeight - cornerRadius - accentLength), accentWidth)
-        drawLine(accent, Offset(left + cornerRadius, top + guideHeight), Offset(left + cornerRadius + accentLength, top + guideHeight), accentWidth)
-        drawLine(accent, Offset(left + guideWidth - cornerRadius, top + guideHeight), Offset(left + guideWidth - cornerRadius - accentLength, top + guideHeight), accentWidth)
-        drawLine(accent, Offset(left + guideWidth, top + guideHeight - cornerRadius), Offset(left + guideWidth, top + guideHeight - cornerRadius - accentLength), accentWidth)
+        drawLine(accent, Offset(left, top + radius), Offset(left, top + radius + accentLength), accentWidth)
+        drawLine(accent, Offset(left + radius, top), Offset(left + radius + accentLength, top), accentWidth)
+        drawLine(accent, Offset(left + guideWidth - radius, top), Offset(left + guideWidth - radius - accentLength, top), accentWidth)
+        drawLine(accent, Offset(left + guideWidth, top + radius), Offset(left + guideWidth, top + radius + accentLength), accentWidth)
+        drawLine(accent, Offset(left, top + guideHeight - radius), Offset(left, top + guideHeight - radius - accentLength), accentWidth)
+        drawLine(accent, Offset(left + radius, top + guideHeight), Offset(left + radius + accentLength, top + guideHeight), accentWidth)
+        drawLine(accent, Offset(left + guideWidth - radius, top + guideHeight), Offset(left + guideWidth - radius - accentLength, top + guideHeight), accentWidth)
+        drawLine(accent, Offset(left + guideWidth, top + guideHeight - radius), Offset(left + guideWidth, top + guideHeight - radius - accentLength), accentWidth)
     }
 }
 
 @Composable
-private fun ScannerStatusPanel(
+private fun StatusPanel(
     presentation: ScannerPresentation,
     modifier: Modifier = Modifier
 ) {
     Surface(
         modifier = modifier.fillMaxWidth(),
-        color = Panel,
+        color = KioskPanel,
         shape = RoundedCornerShape(26.dp),
-        border = BorderStroke(1.dp, Border),
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.14f)),
         shadowElevation = 18.dp
     ) {
         Column(
@@ -405,7 +387,10 @@ private fun ScannerStatusPanel(
                 Box(
                     modifier = Modifier
                         .size(42.dp)
-                        .background(presentation.accent.copy(alpha = 0.14f), RoundedCornerShape(14.dp)),
+                        .background(
+                            presentation.accent.copy(alpha = 0.14f),
+                            RoundedCornerShape(14.dp)
+                        ),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
@@ -421,8 +406,7 @@ private fun ScannerStatusPanel(
                         text = presentation.label.uppercase(),
                         color = presentation.accent,
                         fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 1.1.sp
+                        fontWeight = FontWeight.Bold
                     )
                     Text(
                         text = presentation.title,
@@ -435,24 +419,24 @@ private fun ScannerStatusPanel(
                 }
             }
 
-            Spacer(modifier = Modifier.height(10.dp))
+            Spacer(modifier = Modifier.height(9.dp))
             Text(
                 text = presentation.message,
-                color = Muted,
+                color = KioskMuted,
                 fontSize = 13.sp,
                 lineHeight = 18.sp,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
 
-            Spacer(modifier = Modifier.height(13.dp))
+            Spacer(modifier = Modifier.height(12.dp))
             Surface(
-                color = PanelSoft,
+                modifier = Modifier.fillMaxWidth(),
+                color = KioskPanelSoft,
                 shape = RoundedCornerShape(16.dp),
-                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f)),
-                modifier = Modifier.fillMaxWidth()
+                border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f))
             ) {
-                Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 11.dp)) {
+                Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
                     Text(
                         text = "First scan = clock-in  •  Latest scan = clock-out",
                         color = Color.White,
@@ -463,8 +447,8 @@ private fun ScannerStatusPanel(
                     )
                     Spacer(modifier = Modifier.height(3.dp))
                     Text(
-                        text = "Hands-free verification — no blink or head-turn required",
-                        color = Muted,
+                        text = "No blink or head-turn required",
+                        color = KioskMuted,
                         fontSize = 11.sp,
                         textAlign = TextAlign.Center,
                         modifier = Modifier.fillMaxWidth()
@@ -481,52 +465,46 @@ private fun scannerPresentation(
     qualityMessage: String?
 ): ScannerPresentation = when {
     decision == IdentityDecision.MATCH -> ScannerPresentation(
-        label = "Confirmed",
-        title = "Identity verified",
-        message = "Saving the employee's daily attendance summary.",
-        accent = Green
+        "Confirmed",
+        "Identity verified",
+        "Saving the employee's daily attendance summary.",
+        KioskGreen
     )
-
     decision == IdentityDecision.MULTIPLE_FACES -> ScannerPresentation(
-        label = "Attention",
-        title = "One person at a time",
-        message = "Ask other people to move outside the camera frame.",
-        accent = Amber
+        "Attention",
+        "One person at a time",
+        "Ask other people to move outside the camera frame.",
+        KioskAmber
     )
-
     decision == IdentityDecision.LOW_QUALITY -> ScannerPresentation(
-        label = "Image quality",
-        title = "Improve the camera view",
-        message = qualityMessage ?: "Move closer, face the camera, and avoid strong backlight.",
-        accent = Rose
+        "Image quality",
+        "Improve the camera view",
+        qualityMessage ?: "Move closer, face the camera, and avoid strong backlight.",
+        KioskRose
     )
-
     decision == IdentityDecision.UNKNOWN -> ScannerPresentation(
-        label = "Not recognised",
-        title = "No matching employee found",
-        message = "Look directly at the camera or contact an administrator for enrollment.",
-        accent = Rose
+        "Not recognised",
+        "No matching employee found",
+        "Look directly at the camera or contact an administrator for enrollment.",
+        KioskRose
     )
-
     decision == IdentityDecision.AMBIGUOUS -> ScannerPresentation(
-        label = "Verifying",
-        title = "Hold still for a moment",
-        message = "The app is comparing multiple frames before accepting the identity.",
-        accent = Blue
+        "Verifying",
+        "Hold still for a moment",
+        "Multiple frames are being compared before the identity is accepted.",
+        KioskBlue
     )
-
     faceDetected -> ScannerPresentation(
-        label = "Analysing",
-        title = "Face detected",
-        message = "Keep a natural expression and remain inside the guide.",
-        accent = Blue
+        "Analysing",
+        "Face detected",
+        "Keep a natural expression and remain inside the guide.",
+        KioskBlue
     )
-
     else -> ScannerPresentation(
-        label = "Ready",
-        title = "Step into view",
-        message = "Stand at a comfortable distance and look naturally toward the camera.",
-        accent = Cyan
+        "Ready",
+        "Step into view",
+        "Stand at a comfortable distance and look naturally toward the camera.",
+        KioskCyan
     )
 }
 
@@ -541,15 +519,15 @@ private fun AttendanceConfirmation(
         exit = fadeOut(),
         modifier = modifier
     ) {
-        Card(
+        Surface(
             modifier = Modifier
                 .padding(22.dp)
                 .fillMaxWidth()
                 .widthIn(max = 360.dp),
+            color = Color(0xFF0A1626),
             shape = RoundedCornerShape(28.dp),
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF0A1626)),
-            border = BorderStroke(1.dp, Green.copy(alpha = 0.35f)),
-            elevation = CardDefaults.cardElevation(defaultElevation = 22.dp)
+            border = BorderStroke(1.dp, KioskGreen.copy(alpha = 0.35f)),
+            shadowElevation = 22.dp
         ) {
             Column(
                 modifier = Modifier
@@ -560,25 +538,24 @@ private fun AttendanceConfirmation(
                 Box(
                     modifier = Modifier
                         .size(64.dp)
-                        .background(Green.copy(alpha = 0.16f), CircleShape),
+                        .background(KioskGreen.copy(alpha = 0.16f), CircleShape),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
                         imageVector = Icons.Default.CheckCircle,
                         contentDescription = null,
-                        tint = Green,
+                        tint = KioskGreen,
                         modifier = Modifier.size(38.dp)
                     )
                 }
-
-                Spacer(modifier = Modifier.height(15.dp))
+                Spacer(modifier = Modifier.height(14.dp))
                 Text(
                     text = state.actionTitle.ifBlank { "Attendance saved" },
-                    color = Green,
+                    color = KioskGreen,
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Bold
                 )
-                Spacer(modifier = Modifier.height(5.dp))
+                Spacer(modifier = Modifier.height(4.dp))
                 Text(
                     text = state.employeeName,
                     color = Color.White,
@@ -590,25 +567,19 @@ private fun AttendanceConfirmation(
                 )
                 Text(
                     text = state.department,
-                    color = Muted,
+                    color = KioskMuted,
                     fontSize = 13.sp,
-                    textAlign = TextAlign.Center,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(15.dp))
                 Surface(
                     color = if (state.eventType == "CLOCK_IN") {
-                        Green.copy(alpha = 0.14f)
+                        KioskGreen.copy(alpha = 0.14f)
                     } else {
-                        Blue.copy(alpha = 0.14f)
+                        KioskBlue.copy(alpha = 0.14f)
                     },
-                    shape = RoundedCornerShape(14.dp),
-                    border = BorderStroke(
-                        1.dp,
-                        if (state.eventType == "CLOCK_IN") Green.copy(alpha = 0.30f) else Blue.copy(alpha = 0.30f)
-                    )
+                    shape = RoundedCornerShape(14.dp)
                 ) {
                     Text(
                         text = state.formattedTime,
