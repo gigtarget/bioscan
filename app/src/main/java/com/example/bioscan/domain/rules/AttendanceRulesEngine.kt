@@ -5,6 +5,8 @@ import com.example.bioscan.core.common.TimeUtils
 import com.example.bioscan.core.database.dao.AttendanceDao
 import com.example.bioscan.core.database.entity.AttendanceEventEntity
 import com.example.bioscan.core.database.entity.AttendanceSessionEntity
+import java.util.Calendar
+import java.util.TimeZone
 import java.util.UUID
 
 sealed class AttendanceRuleResult {
@@ -13,15 +15,25 @@ sealed class AttendanceRuleResult {
         val session: AttendanceSessionEntity,
         val employeeId: String,
         val eventType: String,
-        val message: String
+        val message: String,
+        val updatedExistingClockOut: Boolean = false
     ) : AttendanceRuleResult()
 
     data class CooldownActive(val remainingSeconds: Int) : AttendanceRuleResult()
     data class Error(val reason: String) : AttendanceRuleResult()
 }
 
+/**
+ * Produces a single daily attendance summary per employee:
+ *
+ * - First accepted scan of the local day becomes CLOCK_IN.
+ * - Second accepted scan becomes CLOCK_OUT.
+ * - Every later accepted scan replaces the CLOCK_OUT timestamp and evidence.
+ * - The database is compacted transactionally to at most two events and one session per day.
+ */
 class AttendanceRulesEngine(private val attendanceDao: AttendanceDao) {
 
+    @Suppress("UNUSED_PARAMETER")
     suspend fun processAttendanceDecision(
         employeeId: String,
         recognitionScore: Float,
@@ -31,86 +43,185 @@ class AttendanceRulesEngine(private val attendanceDao: AttendanceDao) {
         modelVersion: String,
         terminalMode: TerminalDirectionMode = TerminalDirectionMode.SMART_AUTO,
         cooldownSeconds: Int = 15,
-        auditThumbnailPath: String? = null
+        auditThumbnailPath: String? = null,
+        deviceId: String = "LOCAL_KIOSK_01",
+        timeZoneId: String = TimeZone.getDefault().id
     ): AttendanceRuleResult {
         val now = System.currentTimeMillis()
-
-        // 1. Check cooldown
         val latestEvent = attendanceDao.getLatestEventForEmployee(employeeId)
         if (latestEvent != null) {
-            val elapsedSec = (now - latestEvent.timestamp) / 1000
-            if (elapsedSec < cooldownSeconds) {
-                return AttendanceRuleResult.CooldownActive(remainingSeconds = (cooldownSeconds - elapsedSec).toInt())
+            val elapsedSeconds = ((now - latestEvent.timestamp) / 1000L).coerceAtLeast(0L)
+            if (elapsedSeconds < cooldownSeconds) {
+                return AttendanceRuleResult.CooldownActive(
+                    remainingSeconds = (cooldownSeconds - elapsedSeconds).toInt()
+                )
             }
         }
 
-        // 2. Lookup open session
-        val openSession = attendanceDao.getOpenSessionForEmployee(employeeId)
-
-        val eventType = when (terminalMode) {
-            TerminalDirectionMode.CHECK_IN_ONLY -> "CLOCK_IN"
-            TerminalDirectionMode.CHECK_OUT_ONLY -> "CLOCK_OUT"
-            TerminalDirectionMode.SMART_AUTO, TerminalDirectionMode.MANUAL_PROMPT -> {
-                if (openSession == null) "CLOCK_IN" else "CLOCK_OUT"
-            }
-        }
-
-        val eventId = UUID.randomUUID().toString()
-        val event = AttendanceEventEntity(
-            eventId = eventId,
+        val (dayStart, nextDayStart) = localDayBounds(now, timeZoneId)
+        val existingEvents = attendanceDao.getDailyEventsForEmployee(
             employeeId = employeeId,
-            eventType = eventType,
+            startTimeMs = dayStart,
+            endTimeMs = nextDayStart
+        )
+        val existingSession = attendanceDao.getDailySessionForEmployee(
+            employeeId = employeeId,
+            startTimeMs = dayStart,
+            endTimeMs = nextDayStart
+        )
+
+        val clockInEvent = existingEvents.firstOrNull()?.copy(
+            eventType = "CLOCK_IN",
+            syncState = if (existingEvents.first().eventType == "CLOCK_IN") {
+                existingEvents.first().syncState
+            } else {
+                "PENDING"
+            }
+        ) ?: newEvent(
+            employeeId = employeeId,
+            eventType = "CLOCK_IN",
             timestamp = now,
-            deviceId = "LOCAL_KIOSK_01",
+            deviceId = deviceId,
             recognitionScore = recognitionScore,
             secondBestScore = secondBestScore,
             scoreMargin = scoreMargin,
-            livenessResult = "PASSED",
             qualityScore = qualityScore,
             modelVersion = modelVersion,
-            syncState = "PENDING",
             auditThumbnailPath = auditThumbnailPath
         )
 
-        val updatedOrCreateSession = if (eventType == "CLOCK_IN") {
-            AttendanceSessionEntity(
-                sessionId = UUID.randomUUID().toString(),
+        val acceptedEvents: List<AttendanceEventEntity>
+        val session: AttendanceSessionEntity
+        val eventToConfirm: AttendanceEventEntity
+        val message: String
+        val didUpdateClockOut: Boolean
+
+        if (existingEvents.isEmpty()) {
+            acceptedEvents = listOf(clockInEvent)
+            session = AttendanceSessionEntity(
+                sessionId = existingSession?.sessionId ?: UUID.randomUUID().toString(),
                 employeeId = employeeId,
-                clockInTime = now,
+                clockInTime = clockInEvent.timestamp,
                 clockOutTime = null,
                 status = "OPEN",
                 totalDurationMinutes = 0L,
                 updatedAt = now
             )
+            eventToConfirm = clockInEvent
+            message = "Day started at ${formatTime(now, timeZoneId)}"
+            didUpdateClockOut = false
         } else {
-            val clockInTime = openSession?.clockInTime ?: (now - 8 * 3600 * 1000)
-            val durationMin = TimeUtils.calculateDurationMinutes(clockInTime, now)
-            (openSession ?: AttendanceSessionEntity(
-                sessionId = UUID.randomUUID().toString(),
+            val previousClockOut = existingEvents.drop(1).maxByOrNull { it.timestamp }
+            val clockOutEvent = (previousClockOut ?: newEvent(
                 employeeId = employeeId,
-                clockInTime = clockInTime,
-                clockOutTime = now,
-                status = "COMPLETED",
-                totalDurationMinutes = durationMin,
-                updatedAt = now
+                eventType = "CLOCK_OUT",
+                timestamp = now,
+                deviceId = deviceId,
+                recognitionScore = recognitionScore,
+                secondBestScore = secondBestScore,
+                scoreMargin = scoreMargin,
+                qualityScore = qualityScore,
+                modelVersion = modelVersion,
+                auditThumbnailPath = auditThumbnailPath
             )).copy(
+                employeeId = employeeId,
+                eventType = "CLOCK_OUT",
+                timestamp = now,
+                deviceId = deviceId,
+                recognitionScore = recognitionScore,
+                secondBestScore = secondBestScore,
+                scoreMargin = scoreMargin,
+                livenessResult = "NOT_REQUIRED",
+                qualityScore = qualityScore,
+                modelVersion = modelVersion,
+                syncState = "PENDING",
+                syncAttempts = 0,
+                lastSyncError = null,
+                auditThumbnailPath = auditThumbnailPath,
+                isCorrected = false,
+                correctionReason = null,
+                correctedByAdminId = null
+            )
+
+            acceptedEvents = listOf(clockInEvent, clockOutEvent)
+            val durationMinutes = TimeUtils.calculateDurationMinutes(clockInEvent.timestamp, now)
+            session = AttendanceSessionEntity(
+                sessionId = existingSession?.sessionId ?: UUID.randomUUID().toString(),
+                employeeId = employeeId,
+                clockInTime = clockInEvent.timestamp,
                 clockOutTime = now,
                 status = "COMPLETED",
-                totalDurationMinutes = durationMin,
+                totalDurationMinutes = durationMinutes,
                 updatedAt = now
             )
+            eventToConfirm = clockOutEvent
+            didUpdateClockOut = existingEvents.size >= 2
+            message = if (didUpdateClockOut) {
+                "Latest departure updated to ${formatTime(now, timeZoneId)}"
+            } else {
+                "Departure saved at ${formatTime(now, timeZoneId)}"
+            }
         }
 
-        attendanceDao.recordAttendanceAndSession(event, updatedOrCreateSession)
-
-        val msg = if (eventType == "CLOCK_IN") "Welcome! Clocked In at ${TimeUtils.formatHourMinute(now)}" else "Goodbye! Clocked Out at ${TimeUtils.formatHourMinute(now)}"
+        attendanceDao.replaceDailyAttendance(
+            employeeId = employeeId,
+            startTimeMs = dayStart,
+            endTimeMs = nextDayStart,
+            events = acceptedEvents,
+            session = session,
+            updatedAt = now
+        )
 
         return AttendanceRuleResult.Success(
-            event = event,
-            session = updatedOrCreateSession,
+            event = eventToConfirm,
+            session = session,
             employeeId = employeeId,
-            eventType = eventType,
-            message = msg
+            eventType = eventToConfirm.eventType,
+            message = message,
+            updatedExistingClockOut = didUpdateClockOut
         )
     }
+
+    private fun newEvent(
+        employeeId: String,
+        eventType: String,
+        timestamp: Long,
+        deviceId: String,
+        recognitionScore: Float,
+        secondBestScore: Float,
+        scoreMargin: Float,
+        qualityScore: Float,
+        modelVersion: String,
+        auditThumbnailPath: String?
+    ) = AttendanceEventEntity(
+        eventId = UUID.randomUUID().toString(),
+        employeeId = employeeId,
+        eventType = eventType,
+        timestamp = timestamp,
+        deviceId = deviceId,
+        recognitionScore = recognitionScore,
+        secondBestScore = secondBestScore,
+        scoreMargin = scoreMargin,
+        livenessResult = "NOT_REQUIRED",
+        qualityScore = qualityScore,
+        modelVersion = modelVersion,
+        syncState = "PENDING",
+        auditThumbnailPath = auditThumbnailPath
+    )
+
+    private fun localDayBounds(timestampMs: Long, timeZoneId: String): Pair<Long, Long> {
+        val timeZone = TimeZone.getTimeZone(timeZoneId)
+        val start = Calendar.getInstance(timeZone).apply {
+            timeInMillis = timestampMs
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+        val end = (start.clone() as Calendar).apply { add(Calendar.DAY_OF_YEAR, 1) }
+        return start.timeInMillis to end.timeInMillis
+    }
+
+    private fun formatTime(timestampMs: Long, timeZoneId: String): String =
+        TimeUtils.formatLocalTime(timestampMs, "hh:mm a", timeZoneId)
 }
