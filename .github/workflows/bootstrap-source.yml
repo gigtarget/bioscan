@@ -6,18 +6,22 @@ on:
     paths:
       - '.bootstrap/**'
       - '.github/workflows/bootstrap-source.yml'
+  pull_request_target:
+    types: [opened, synchronize]
   workflow_dispatch:
 
 permissions:
   contents: write
+  pull-requests: read
 
 jobs:
   unpack-build:
     runs-on: ubuntu-latest
     steps:
-      - name: Check out repository
+      - name: Check out main branch
         uses: actions/checkout@v4
         with:
+          ref: main
           fetch-depth: 0
 
       - name: Reconstruct Android source archive
@@ -51,7 +55,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
           git commit -m "Publish BioScan Android Studio project"
-          git push
+          git push origin main
 
       - name: Build debug APK
         run: ./gradlew --no-daemon assembleDebug
