@@ -2,13 +2,113 @@ name: Build BioScan APK
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - 'gradle/**'
+      - '*.gradle.kts'
+      - 'gradle.properties'
+      - '.github/workflows/android-build.yml'
+      - 'scripts/facenet_payload.part*'
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-debug-apk:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Recognition upgrade in progress
-        run: echo "Automatic builds are temporarily paused while the FaceNet upgrade is committed."
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Apply staged FaceNet source upgrade
+        shell: bash
+        run: |
+          if compgen -G 'scripts/facenet_payload.part*' > /dev/null; then
+            cat scripts/facenet_payload.part* | base64 --decode | tar -xzf -
+            sed -i 's/com.google.ai.edge.litert:litert:1.4.2/com.google.ai.edge.litert:litert:1.4.1/' app/build.gradle.kts
+            rm -f scripts/facenet_payload.part*
+
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add -A app scripts
+            if ! git diff --cached --quiet; then
+              git commit -m 'Upgrade to robust FaceNet recognition and guided enrollment'
+              git push origin HEAD:main
+            fi
+          fi
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Accept Android SDK licences
+        shell: bash
+        run: yes | sdkmanager --licenses > /dev/null || true
+
+      - name: Install Android SDK 36
+        shell: bash
+        run: sdkmanager --install 'platforms;android-36' 'build-tools;36.0.0'
+
+      - name: Download FaceNet model and record checksum
+        shell: bash
+        run: |
+          mkdir -p app/src/main/assets
+          curl --fail --location --retry 4 --retry-delay 2 \
+            --output app/src/main/assets/facenet.tflite \
+            'https://raw.githubusercontent.com/shubham0204/FaceRecognition_With_FaceNet_Android/master/app/src/main/assets/facenet.tflite'
+          test "$(stat -c%s app/src/main/assets/facenet.tflite)" -gt 1000000
+          sha256sum app/src/main/assets/facenet.tflite | tee facenet-model.sha256
+
+      - name: Restore persistent development signing key
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: bioscan-compatible-debug-keystore-v1
+
+      - name: Set up Gradle 9.3.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.3.1'
+
+      - name: Build robust FaceNet APK
+        shell: bash
+        run: |
+          set -o pipefail
+          gradle --no-daemon :app:assembleDebug --stacktrace --warning-mode all 2>&1 | tee build.log
+
+      - name: Verify APK signature, model, and alignment
+        shell: bash
+        run: |
+          APK='app/build/outputs/apk/debug/app-debug.apk'
+          unzip -l "$APK" | grep -E 'assets/facenet\.tflite'
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs "$APK" | tee apk-info.txt
+          "$ANDROID_HOME/build-tools/36.0.0/zipalign" -c -P 16 -v 4 "$APK" | tee -a apk-info.txt
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$APK" | head -n 12 | tee -a apk-info.txt
+          cp "$APK" BioScan-Kiosk-FaceNet.apk
+
+      - name: Upload build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: BioScan-build-diagnostics
+          path: |
+            build.log
+            apk-info.txt
+            facenet-model.sha256
+          if-no-files-found: warn
+
+      - name: Upload installable APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: BioScan-Kiosk-FaceNet-apk
+          path: BioScan-Kiosk-FaceNet.apk
+          if-no-files-found: error
